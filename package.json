@@ -1,0 +1,27 @@
+{
+  "name": "vibeqa",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b apps/benchmark-app apps/cli apps/worker packages/browser-tools packages/prompts packages/schemas packages/test-fixtures",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "npm run build",
+    "vibeqa": "npm --workspace @vibeqa/cli run start --"
+  },
+  "devDependencies": {
+    "@eslint/js": "^8.57.1",
+    "eslint": "^8.57.1",
+    "prettier": "^3.6.2",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^7.18.0",
+    "vitest": "^2.1.9"
+  }
+}

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+run-output/
+.auth/
+docs/
+README.md
+*.tsbuildinfo
+

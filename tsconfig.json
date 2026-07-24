@@ -1,0 +1,26 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./apps/benchmark-app"
+    },
+    {
+      "path": "./apps/cli"
+    },
+    {
+      "path": "./apps/worker"
+    },
+    {
+      "path": "./packages/browser-tools"
+    },
+    {
+      "path": "./packages/prompts"
+    },
+    {
+      "path": "./packages/schemas"
+    },
+    {
+      "path": "./packages/test-fixtures"
+    }
+  ]
+}
