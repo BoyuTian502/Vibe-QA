@@ -1,0 +1,36 @@
+{
+  "application": "benchmark-saas-workspace",
+  "agentVisible": false,
+  "bugs": [
+    {
+      "id": "BUG-BENCH-001",
+      "type": "persistence",
+      "severity": "high",
+      "description": "Created projects appear immediately in the UI response but disappear after refresh because the create endpoint does not persist them."
+    },
+    {
+      "id": "BUG-BENCH-002",
+      "type": "authentication",
+      "severity": "critical",
+      "description": "After logout, navigating directly to /dashboard still exposes private workspace content."
+    },
+    {
+      "id": "BUG-BENCH-003",
+      "type": "validation",
+      "severity": "medium",
+      "description": "Whitespace-only project names are accepted by the create endpoint."
+    },
+    {
+      "id": "BUG-BENCH-004",
+      "type": "server_error",
+      "severity": "high",
+      "description": "The designated Sync billing report action returns HTTP 500."
+    },
+    {
+      "id": "BUG-BENCH-005",
+      "type": "client_exception",
+      "severity": "high",
+      "description": "Clicking the fragile dashboard widget throws an uncaught JavaScript exception."
+    }
+  ]
+}

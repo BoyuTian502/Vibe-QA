@@ -1,9 +1,9 @@
 node_modules/
 dist/
+**/dist/
 coverage/
 run-output/
 .auth/
 docs/
 README.md
 *.tsbuildinfo
-
