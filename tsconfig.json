@@ -11,6 +11,9 @@
       "path": "./apps/worker"
     },
     {
+      "path": "./packages/agent-core"
+    },
+    {
       "path": "./packages/browser-tools"
     },
     {

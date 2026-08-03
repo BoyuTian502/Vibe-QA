@@ -1,0 +1,17 @@
+{
+  "name": "@vibeqa/agent-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@vibeqa/browser-tools": "0.0.0",
+    "@vibeqa/schemas": "0.0.0"
+  }
+}
