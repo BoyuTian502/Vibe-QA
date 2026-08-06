@@ -5,6 +5,7 @@ import {
   type BenchmarkServer
 } from "../../../apps/benchmark-app/src/index.js";
 import { BrowserSession } from "../../browser-tools/src/index.js";
+import { MockPlanner } from "../../planner/src/index.js";
 import { AgentLoop } from "../src/index.js";
 
 let app: BenchmarkServer;
@@ -29,7 +30,8 @@ describe("AgentLoop", () => {
     await browser.goto(`${app.url}/login`);
     const loop = new AgentLoop({
       goal: "Log in to the benchmark SaaS workspace",
-      browser
+      browser,
+      planner: new MockPlanner()
     });
 
     const step = await loop.runStep();

@@ -1,13 +1,12 @@
-import type { BrowserAction, Observation } from "@vibeqa/schemas";
+import type { AgentState, BrowserAction, Observation } from "@vibeqa/schemas";
 
-import type { AgentState } from "./state.js";
+import type { Planner } from "./planner.js";
 
-export interface AgentPlanner {
-  decide(state: AgentState, observation: Observation): BrowserAction | null;
-}
-
-export class MockPlanner implements AgentPlanner {
-  decide(state: AgentState, observation: Observation): BrowserAction | null {
+export class MockPlanner implements Planner {
+  async decide(
+    state: AgentState,
+    observation: Observation
+  ): Promise<BrowserAction | null> {
     if (isLoginPage(observation)) {
       return this.planLoginPageAction(state);
     }
@@ -16,10 +15,10 @@ export class MockPlanner implements AgentPlanner {
   }
 
   private planLoginPageAction(state: AgentState): BrowserAction | null {
-    const completedTypes = state.actionHistory.map((record) => record.action);
+    const completedActions = state.actionHistory.map((record) => record.action);
 
     if (
-      !completedTypes.some(
+      !completedActions.some(
         (action) => action.type === "type" && action.selector === 'input[name="email"]'
       )
     ) {
@@ -31,7 +30,7 @@ export class MockPlanner implements AgentPlanner {
     }
 
     if (
-      !completedTypes.some(
+      !completedActions.some(
         (action) =>
           action.type === "type" && action.selector === 'input[name="password"]'
       )
@@ -44,7 +43,7 @@ export class MockPlanner implements AgentPlanner {
     }
 
     if (
-      !completedTypes.some(
+      !completedActions.some(
         (action) =>
           action.type === "click" && action.selector === 'button[type="submit"]'
       )

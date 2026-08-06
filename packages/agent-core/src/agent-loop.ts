@@ -1,18 +1,19 @@
 import type { BrowserSession } from "@vibeqa/browser-tools";
-import type { BrowserAction, Observation } from "@vibeqa/schemas";
+import type {
+  ActionRecord,
+  AgentState,
+  BrowserAction,
+  BrowserActionResult,
+  Observation
+} from "@vibeqa/schemas";
+import type { Planner } from "@vibeqa/planner";
 
-import { MockPlanner, type AgentPlanner } from "./mock-planner.js";
-import {
-  createInitialAgentState,
-  type ActionRecord,
-  type AgentState,
-  type BrowserActionResult
-} from "./state.js";
+import { createInitialAgentState } from "./state.js";
 
 export interface AgentLoopOptions {
   goal: string;
   browser: BrowserSession;
-  planner?: AgentPlanner;
+  planner: Planner;
 }
 
 export interface AgentStepResult {
@@ -24,18 +25,18 @@ export interface AgentStepResult {
 
 export class AgentLoop {
   private readonly browser: BrowserSession;
-  private readonly planner: AgentPlanner;
+  private readonly planner: Planner;
   readonly state: AgentState;
 
   constructor(options: AgentLoopOptions) {
     this.browser = options.browser;
-    this.planner = options.planner ?? new MockPlanner();
+    this.planner = options.planner;
     this.state = createInitialAgentState(options.goal);
   }
 
   async runStep(): Promise<AgentStepResult> {
     const observation = await this.observe();
-    const action = this.decideAction(observation);
+    const action = await this.decideAction(observation);
 
     if (!action) {
       this.state.status = "completed";
@@ -66,9 +67,9 @@ export class AgentLoop {
     return observation;
   }
 
-  private decideAction(observation: Observation): BrowserAction | null {
+  private async decideAction(observation: Observation): Promise<BrowserAction | null> {
     this.state.status = "deciding";
-    return this.planner.decide(this.state, observation);
+    return await this.planner.decide(this.state, observation);
   }
 
   private async executeAction(action: BrowserAction): Promise<BrowserActionResult> {

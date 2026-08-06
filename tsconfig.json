@@ -17,6 +17,12 @@
       "path": "./packages/browser-tools"
     },
     {
+      "path": "./packages/llm"
+    },
+    {
+      "path": "./packages/planner"
+    },
+    {
       "path": "./packages/prompts"
     },
     {

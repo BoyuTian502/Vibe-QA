@@ -8,7 +8,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b apps/benchmark-app apps/cli apps/worker packages/agent-core packages/browser-tools packages/prompts packages/schemas packages/test-fixtures",
+    "build": "tsc -b apps/benchmark-app apps/cli apps/worker packages/schemas packages/llm packages/planner packages/browser-tools packages/agent-core packages/prompts packages/test-fixtures",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
