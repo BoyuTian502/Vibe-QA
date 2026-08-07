@@ -47,6 +47,12 @@ describe("BrowserSession", () => {
     expect(ObservationSchema.parse(observation)).toEqual(observation);
     expect(observation.url).toBe(`${app.url}/login`);
     expect(observation.title).toContain("VibeQA Benchmark Login");
+    expect(observation.metadata.title).toBe(observation.title);
+    expect(observation.consoleErrors).toEqual([]);
+    expect(observation.accessibility.headings.map((heading) => heading.text)).toContain(
+      "Sign in to Acme Growth"
+    );
+    expect(observation.accessibility.interactiveElementCount).toBeGreaterThan(0);
     expect(observation.textSample).toContain("Sign in to Acme Growth");
     expect(
       observation.elements.some((element) => element.selector === 'input[name="email"]')

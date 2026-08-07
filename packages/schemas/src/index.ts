@@ -1,9 +1,21 @@
 export {
   BrowserActionSchema,
+  AccessibilityHeadingSchema,
+  AccessibilityInfoSchema,
+  AccessibilityLandmarkSchema,
+  ConsoleErrorSchema,
   ElementInformationSchema,
-  ObservationSchema
+  ObservationSchema,
+  PageMetadataSchema
 } from "./browser.js";
-export type { BrowserAction, ElementInformation, Observation } from "./browser.js";
+export type {
+  AccessibilityInfo,
+  BrowserAction,
+  ConsoleError,
+  ElementInformation,
+  Observation,
+  PageMetadata
+} from "./browser.js";
 export {
   ActionRecordSchema,
   AgentStateSchema,

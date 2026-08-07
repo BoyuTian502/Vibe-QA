@@ -20,7 +20,12 @@ export interface AgentStepResult {
   observation: Observation;
   action: BrowserAction | null;
   result: BrowserActionResult | null;
+  nextObservation: Observation | null;
   state: AgentState;
+}
+
+export interface AgentRunOptions {
+  maxSteps: number;
 }
 
 export class AgentLoop {
@@ -34,6 +39,18 @@ export class AgentLoop {
     this.state = createInitialAgentState(options.goal);
   }
 
+  async run(options: AgentRunOptions): Promise<AgentState> {
+    while (
+      this.state.stepCount < options.maxSteps &&
+      this.state.status !== "completed" &&
+      this.state.status !== "failed"
+    ) {
+      await this.runStep();
+    }
+
+    return this.state;
+  }
+
   async runStep(): Promise<AgentStepResult> {
     const observation = await this.observe();
     const action = await this.decideAction(observation);
@@ -44,17 +61,21 @@ export class AgentLoop {
         observation,
         action,
         result: null,
+        nextObservation: null,
         state: this.state
       };
     }
 
     const result = await this.executeAction(action);
     this.updateState(action, result);
+    const nextObservation = await this.observe();
+    this.state.status = result.ok ? "idle" : "failed";
 
     return {
       observation,
       action,
       result,
+      nextObservation,
       state: this.state
     };
   }
@@ -80,6 +101,9 @@ export class AgentLoop {
         case "goto":
           await this.browser.goto(action.url);
           return { ok: true };
+        case "navigate":
+          await this.browser.navigate(action.url);
+          return { ok: true };
         case "click":
           await this.browser.click(action.selector);
           return { ok: true };
@@ -88,6 +112,9 @@ export class AgentLoop {
           return { ok: true };
         case "getText":
           return { ok: true, value: await this.browser.getText(action.selector) };
+        case "wait":
+          await this.browser.wait(action.ms);
+          return { ok: true };
         case "screenshot": {
           const value = await this.browser.screenshot({ path: action.path });
           return {
@@ -95,6 +122,9 @@ export class AgentLoop {
             value: typeof value === "string" ? value : "[screenshot-bytes]"
           };
         }
+        case "assert":
+          await this.browser.assert(action.selector, action.containsText);
+          return { ok: true };
         case "getCurrentUrl":
           return { ok: true, value: this.browser.getCurrentUrl() };
       }

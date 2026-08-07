@@ -5,6 +5,8 @@ import { randomUUID } from "node:crypto";
 
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import {
+  type AccessibilityInfo,
+  type ConsoleError,
   ElementInformationSchema,
   ObservationSchema,
   type ElementInformation,
@@ -26,11 +28,16 @@ export interface ScreenshotOptions {
 }
 
 export class BrowserSession {
+  private readonly consoleErrors: ConsoleError[];
+
   private constructor(
     private readonly browser: Browser,
     private readonly context: BrowserContext,
-    private readonly page: Page
-  ) {}
+    private readonly page: Page,
+    consoleErrors: ConsoleError[]
+  ) {
+    this.consoleErrors = consoleErrors;
+  }
 
   static async launch(options: BrowserSessionOptions = {}): Promise<BrowserSession> {
     const executablePath = options.executablePath ?? findSystemChromiumExecutable();
@@ -42,12 +49,41 @@ export class BrowserSession {
       viewport: options.viewport ?? { width: 1280, height: 900 }
     });
     const page = await context.newPage();
+    const consoleErrors: ConsoleError[] = [];
 
-    return new BrowserSession(browser, context, page);
+    page.on("console", (message) => {
+      if (message.type() !== "error") {
+        return;
+      }
+
+      if (message.text().startsWith("Failed to load resource:")) {
+        return;
+      }
+
+      consoleErrors.push({
+        type: "console",
+        text: message.text(),
+        location: message.location()
+      });
+    });
+
+    page.on("pageerror", (error) => {
+      consoleErrors.push({
+        type: "pageerror",
+        text: error.message,
+        location: null
+      });
+    });
+
+    return new BrowserSession(browser, context, page, consoleErrors);
   }
 
   async goto(url: string): Promise<void> {
     await this.page.goto(url, { waitUntil: "domcontentloaded" });
+  }
+
+  async navigate(url: string): Promise<void> {
+    await this.goto(url);
   }
 
   async click(selector: string): Promise<void> {
@@ -60,6 +96,19 @@ export class BrowserSession {
 
   async getText(selector: string): Promise<string> {
     return (await this.page.locator(selector).innerText()).trim();
+  }
+
+  async wait(ms: number): Promise<void> {
+    await this.page.waitForTimeout(ms);
+  }
+
+  async assert(selector: string, containsText: string): Promise<void> {
+    const text = await this.getText(selector);
+    if (!text.includes(containsText)) {
+      throw new Error(
+        `Assertion failed for ${selector}: expected text to contain "${containsText}".`
+      );
+    }
   }
 
   async screenshot(options: ScreenshotOptions = {}): Promise<Uint8Array | string> {
@@ -86,6 +135,9 @@ export class BrowserSession {
       ? String(await this.screenshot({ path: options.screenshotPath }))
       : null;
     const elements = await this.collectElements();
+    const accessibility = await this.collectAccessibilityInfo(elements.length);
+    const title = await this.page.title();
+    const url = this.getCurrentUrl();
     const textSample = (await this.page.locator("body").innerText())
       .trim()
       .slice(0, 2000);
@@ -93,8 +145,15 @@ export class BrowserSession {
     return ObservationSchema.parse({
       id: randomUUID(),
       timestamp: new Date().toISOString(),
-      url: this.getCurrentUrl(),
-      title: await this.page.title(),
+      url,
+      title,
+      metadata: {
+        url,
+        title,
+        viewport: this.page.viewportSize()
+      },
+      consoleErrors: this.consoleErrors,
+      accessibility,
       elements,
       textSample,
       screenshotPath
@@ -163,6 +222,67 @@ export class BrowserSession {
       });
 
     return elements.map((element) => ElementInformationSchema.parse(element));
+  }
+
+  private async collectAccessibilityInfo(
+    interactiveElementCount: number
+  ): Promise<AccessibilityInfo> {
+    return await this.page.evaluate((count) => {
+      const headings = Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6"))
+        .map((heading) => ({
+          level: Number(heading.tagName.slice(1)),
+          text: (heading.textContent ?? "").trim()
+        }))
+        .filter((heading) => heading.text.length > 0);
+
+      const landmarks = Array.from(
+        document.querySelectorAll("main, nav, header, footer, aside, section, [role]")
+      )
+        .map((element) => {
+          const explicitRole = element.getAttribute("role");
+          const tagRole = roleForTag(element.tagName.toLowerCase());
+          const role = explicitRole ?? tagRole;
+          if (!role) {
+            return null;
+          }
+
+          return {
+            role,
+            name:
+              element.getAttribute("aria-label") ??
+              element.getAttribute("aria-labelledby") ??
+              null
+          };
+        })
+        .filter((landmark): landmark is { role: string; name: string | null } =>
+          Boolean(landmark)
+        );
+
+      return {
+        headings,
+        landmarks,
+        interactiveElementCount: count
+      };
+
+      function roleForTag(tagName: string): string | null {
+        switch (tagName) {
+          case "main":
+            return "main";
+          case "nav":
+            return "navigation";
+          case "header":
+            return "banner";
+          case "footer":
+            return "contentinfo";
+          case "aside":
+            return "complementary";
+          case "section":
+            return "region";
+          default:
+            return null;
+        }
+      }
+    }, interactiveElementCount);
   }
 }
 

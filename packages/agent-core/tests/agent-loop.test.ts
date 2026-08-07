@@ -44,8 +44,9 @@ describe("AgentLoop", () => {
     });
     expect(step.result).toEqual({ ok: true });
     expect(step.state.goal).toBe("Log in to the benchmark SaaS workspace");
-    expect(step.state.currentObservation?.id).toBe(step.observation.id);
-    expect(step.state.observationHistory).toHaveLength(1);
+    expect(step.nextObservation).not.toBeNull();
+    expect(step.state.currentObservation?.id).toBe(step.nextObservation?.id);
+    expect(step.state.observationHistory).toHaveLength(2);
     expect(step.state.actionHistory).toHaveLength(1);
     expect(step.state.actionHistory[0]?.action).toEqual(step.action);
     expect(step.state.stepCount).toBe(1);

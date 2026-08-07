@@ -11,6 +11,9 @@
       "path": "../browser-tools"
     },
     {
+      "path": "../llm"
+    },
+    {
       "path": "../planner"
     },
     {
