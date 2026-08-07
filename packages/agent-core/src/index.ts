@@ -11,3 +11,4 @@ export type { EvaluationResult } from "./evaluator.js";
 export { Memory } from "./memory.js";
 export type { MemoryHistory } from "./memory.js";
 export { createInitialAgentState } from "./state.js";
+export type { AgentTrace, AgentTraceStep } from "./trace.js";

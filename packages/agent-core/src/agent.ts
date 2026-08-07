@@ -7,6 +7,7 @@ import {
 
 import { Evaluator, type EvaluationResult } from "./evaluator.js";
 import { Memory } from "./memory.js";
+import type { AgentTrace, AgentTraceStep } from "./trace.js";
 
 export interface AgentState {
   goal: string;
@@ -45,6 +46,9 @@ export class Agent {
   private readonly memory: Memory;
   private readonly evaluator: Evaluator;
   private pendingAction: BrowserAction | null = null;
+  private trace: AgentTrace = { goal: "", steps: [] };
+  private currentTraceStep: AgentTraceStep | null = null;
+  private actionTraceStep: AgentTraceStep | null = null;
   private halted = false;
 
   state: AgentState = createAgentState("");
@@ -65,6 +69,9 @@ export class Agent {
     this.state = createAgentState(goal);
     this.memory.clear();
     this.pendingAction = null;
+    this.trace = { goal, steps: [] };
+    this.currentTraceStep = null;
+    this.actionTraceStep = null;
     this.halted = false;
 
     try {
@@ -107,10 +114,16 @@ export class Agent {
   }
 
   async observe(): Promise<Observation> {
-    const observation = await this.browser.observe();
-    this.state.currentObservation = observation;
-    this.memory.addObservation(observation);
-    return observation;
+    const traceStep = this.createTraceStep();
+
+    try {
+      const observation = await this.browser.observe();
+      this.recordObservation(observation, traceStep);
+      return observation;
+    } catch (error) {
+      this.recordTraceError(traceStep, error);
+      throw error;
+    }
   }
 
   async think(): Promise<BrowserAction | null> {
@@ -119,12 +132,23 @@ export class Agent {
       throw new Error("The agent cannot think before observing the page.");
     }
 
-    const response = await this.llmClient.generate(
-      this.createReasoningPrompt(observation)
-    );
-    const action = parseBrowserAction(response);
-    this.pendingAction = action;
-    return action;
+    const traceStep = this.currentTraceStep ?? this.createTraceStep(observation);
+    const prompt = this.createReasoningPrompt(observation);
+    traceStep.thought.prompt = prompt;
+
+    try {
+      const response = await this.llmClient.generate(prompt);
+      traceStep.thought.reasoning = response;
+      const action = parseBrowserAction(response);
+      traceStep.action = action;
+      traceStep.result = { success: true };
+      this.pendingAction = action;
+      this.actionTraceStep = action ? traceStep : null;
+      return action;
+    } catch (error) {
+      this.recordTraceError(traceStep, error);
+      throw error;
+    }
   }
 
   async act(action: BrowserAction | null = this.pendingAction): Promise<void> {
@@ -132,24 +156,43 @@ export class Agent {
       throw new Error("The agent has no browser action to execute.");
     }
 
-    await this.executeAction(action);
-    this.state.stepCount += 1;
-    this.state.actionHistory.push(action);
-    this.memory.addAction(action);
-    this.pendingAction = null;
+    const traceStep = this.actionTraceStep ?? this.currentTraceStep;
+    if (traceStep) {
+      traceStep.action = action;
+      this.actionTraceStep = traceStep;
+    }
+
+    try {
+      await this.executeAction(action);
+      this.state.stepCount += 1;
+      this.state.actionHistory.push(action);
+      this.memory.addAction(action);
+      this.pendingAction = null;
+      if (traceStep) {
+        traceStep.result = { success: true };
+      }
+    } catch (error) {
+      if (traceStep) {
+        this.recordTraceError(traceStep, error);
+      }
+      throw error;
+    }
   }
 
   async reflect(
     previousAction: BrowserAction,
     newObservation?: Observation
   ): Promise<EvaluationResult> {
+    const evaluatedTraceStep = this.actionTraceStep;
     const observation = newObservation ?? (await this.observe());
     if (newObservation) {
-      this.state.currentObservation = newObservation;
-      this.memory.addObservation(newObservation);
+      this.recordObservation(newObservation, this.createTraceStep());
     }
 
     const evaluation = this.evaluator.evaluate(previousAction, observation);
+    if (evaluatedTraceStep) {
+      evaluatedTraceStep.evaluation = evaluation;
+    }
     if (!evaluation.success) {
       this.memory.addBug(evaluation.reason);
     }
@@ -158,11 +201,24 @@ export class Agent {
       this.memory.addBug(consoleError.text);
     }
 
+    this.actionTraceStep = null;
     return evaluation;
   }
 
   getMemory(): Memory {
     return this.memory;
+  }
+
+  getTrace(): AgentTrace {
+    return {
+      goal: this.trace.goal,
+      steps: this.trace.steps.map((step) => ({
+        ...step,
+        thought: { ...step.thought },
+        result: { ...step.result },
+        evaluation: step.evaluation ? { ...step.evaluation } : undefined
+      }))
+    };
   }
 
   private createReasoningPrompt(observation: Observation): string {
@@ -214,9 +270,42 @@ export class Agent {
   }
 
   private recordError(error: unknown): void {
-    this.state.errors.push(
-      error instanceof Error ? error.message : "Unknown agent error"
-    );
+    const message = errorMessage(error);
+    this.state.errors.push(message);
+
+    const traceStep = this.currentTraceStep;
+    if (traceStep && traceStep.result.error !== message) {
+      this.recordTraceError(traceStep, error);
+    }
+  }
+
+  private createTraceStep(observation: Observation | null = null): AgentTraceStep {
+    const step: AgentTraceStep = {
+      timestamp: new Date().toISOString(),
+      observation,
+      thought: {},
+      action: null,
+      result: { success: true }
+    };
+
+    this.trace.steps.push(step);
+    this.currentTraceStep = step;
+    return step;
+  }
+
+  private recordObservation(observation: Observation, traceStep: AgentTraceStep): void {
+    this.state.currentObservation = observation;
+    this.memory.addObservation(observation);
+    traceStep.observation = observation;
+    traceStep.result = { success: true };
+    this.currentTraceStep = traceStep;
+  }
+
+  private recordTraceError(traceStep: AgentTraceStep, error: unknown): void {
+    traceStep.result = {
+      success: false,
+      error: errorMessage(error)
+    };
   }
 }
 
@@ -244,4 +333,8 @@ function parseBrowserAction(response: string): BrowserAction | null {
 function stripJsonCodeFence(response: string): string {
   const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(response);
   return match?.[1] ?? response;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Unknown agent error";
 }
