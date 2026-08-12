@@ -17,6 +17,9 @@
       "path": "./packages/browser-tools"
     },
     {
+      "path": "./packages/browser-playwright"
+    },
+    {
       "path": "./packages/llm"
     },
     {
@@ -30,6 +33,12 @@
     },
     {
       "path": "./packages/test-fixtures"
+    },
+    {
+      "path": "./packages/test-engine"
+    },
+    {
+      "path": "./packages/test-runner"
     }
   ]
 }

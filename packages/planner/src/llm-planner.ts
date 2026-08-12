@@ -28,6 +28,8 @@ export class LLMPlanner implements Planner {
       `Step count: ${state.stepCount}`,
       `Current URL: ${observation.url}`,
       `Title: ${observation.title}`,
+      `Console errors: ${JSON.stringify(observation.consoleErrors)}`,
+      `Accessibility: ${JSON.stringify(observation.accessibility)}`,
       `Visible text: ${observation.textSample}`,
       `Elements: ${JSON.stringify(
         observation.elements.map((element) => ({

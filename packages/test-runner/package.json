@@ -1,5 +1,5 @@
 {
-  "name": "@vibeqa/llm",
+  "name": "@vibeqa/test-runner",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,6 +9,12 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@vibeqa/agent-core": "0.0.0",
+    "@vibeqa/browser-tools": "0.0.0",
+    "@vibeqa/planner": "0.0.0",
+    "@vibeqa/schemas": "0.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.15"

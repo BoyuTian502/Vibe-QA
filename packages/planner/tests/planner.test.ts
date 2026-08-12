@@ -18,6 +18,30 @@ const loginObservation: Observation = {
   timestamp: "2026-08-06T00:00:00.000Z",
   url: "http://localhost:3000/login",
   title: "VibeQA Benchmark Login - VibeQA Benchmark",
+  metadata: {
+    url: "http://localhost:3000/login",
+    title: "VibeQA Benchmark Login - VibeQA Benchmark",
+    viewport: {
+      width: 1280,
+      height: 900
+    }
+  },
+  consoleErrors: [],
+  accessibility: {
+    headings: [
+      {
+        level: 1,
+        text: "Sign in to Acme Growth"
+      }
+    ],
+    landmarks: [
+      {
+        role: "main",
+        name: null
+      }
+    ],
+    interactiveElementCount: 1
+  },
   elements: [
     {
       id: "element-1",
