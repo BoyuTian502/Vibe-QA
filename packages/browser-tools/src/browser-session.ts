@@ -188,6 +188,7 @@ export class BrowserSession {
           .map((node, index) => {
             const element = node as HTMLElement;
             const input = element instanceof HTMLInputElement ? element : null;
+            const anchor = element instanceof HTMLAnchorElement ? element : null;
             const textarea = element instanceof HTMLTextAreaElement ? element : null;
             const select = element instanceof HTMLSelectElement ? element : null;
             const disabled =
@@ -216,7 +217,9 @@ export class BrowserSession {
               visible: element.offsetParent !== null,
               enabled: !disabled,
               editable: Boolean(input || textarea || select),
-              selector: selectorFor(element)
+              selector: selectorFor(element),
+              href: anchor?.href ?? null,
+              inputType: input?.type ?? null
             };
           });
       });

@@ -9,7 +9,9 @@ export const ElementInformationSchema = z.object({
   visible: z.boolean(),
   enabled: z.boolean(),
   editable: z.boolean(),
-  selector: z.string().min(1)
+  selector: z.string().min(1),
+  href: z.string().url().nullable().optional(),
+  inputType: z.string().min(1).nullable().optional()
 });
 
 export const ConsoleErrorSchema = z.object({

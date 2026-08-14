@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../agent-core"
+    },
+    {
+      "path": "../llm"
+    },
+    {
+      "path": "../safety-policy"
+    },
+    {
+      "path": "../schemas"
+    }
+  ]
+}

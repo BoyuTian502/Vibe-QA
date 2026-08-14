@@ -20,6 +20,9 @@
       "path": "./packages/browser-playwright"
     },
     {
+      "path": "./packages/explorer"
+    },
+    {
       "path": "./packages/llm"
     },
     {
