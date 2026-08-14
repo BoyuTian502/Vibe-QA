@@ -15,6 +15,14 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@vibeqa/agent-core": "0.0.0",
+    "@vibeqa/benchmark-app": "0.0.0",
+    "@vibeqa/browser-playwright": "0.0.0",
+    "@vibeqa/schemas": "0.0.0",
+    "@vibeqa/test-engine": "0.0.0",
     "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.15"
   }
 }

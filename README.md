@@ -81,6 +81,27 @@ run-output/
 └── screenshots/
 ```
 
+## Technical Demo
+
+Run the complete local browser-testing demonstration from the repository root:
+
+```bash
+npm run demo:qa
+```
+
+The command starts the benchmark application, opens a visible Chromium browser,
+logs in with the local benchmark account, triggers the seeded fragile-widget bug,
+and prints the resulting BugReport. Reports, traces, and real screenshots are saved
+under `run-output/demo/<timestamp>/`.
+
+Use the successful login scenario or keep the browser open for a presentation:
+
+```bash
+npm run demo:qa -- --scenario login
+npm run demo:qa -- --scenario bug
+npm run demo:qa -- --keep-open
+```
+
 ## Engineering rules
 
 - Use TypeScript across the Alpha-0 stack.
