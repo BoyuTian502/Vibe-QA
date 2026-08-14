@@ -32,6 +32,9 @@
       "path": "./packages/schemas"
     },
     {
+      "path": "./packages/safety-policy"
+    },
+    {
       "path": "./packages/test-fixtures"
     },
     {

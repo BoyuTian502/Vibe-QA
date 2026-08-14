@@ -8,18 +8,6 @@
   "include": ["src/**/*.ts"],
   "references": [
     {
-      "path": "../browser-tools"
-    },
-    {
-      "path": "../llm"
-    },
-    {
-      "path": "../planner"
-    },
-    {
-      "path": "../safety-policy"
-    },
-    {
       "path": "../schemas"
     }
   ]

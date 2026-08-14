@@ -1,5 +1,5 @@
 {
-  "name": "@vibeqa/agent-core",
+  "name": "@vibeqa/safety-policy",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,10 +11,6 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@vibeqa/browser-tools": "0.0.0",
-    "@vibeqa/llm": "0.0.0",
-    "@vibeqa/planner": "0.0.0",
-    "@vibeqa/safety-policy": "0.0.0",
     "@vibeqa/schemas": "0.0.0"
   }
 }

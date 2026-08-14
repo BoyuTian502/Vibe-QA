@@ -1,5 +1,10 @@
 export { Agent } from "./agent.js";
-export type { AgentOptions, AgentState, BrowserController } from "./agent.js";
+export type {
+  AgentOptions,
+  AgentState,
+  BrowserController,
+  PendingApproval
+} from "./agent.js";
 export { AgentLoop } from "./agent-loop.js";
 export type {
   AgentLoopOptions,

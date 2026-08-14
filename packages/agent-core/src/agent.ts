@@ -1,5 +1,10 @@
 import type { LLMClient } from "@vibeqa/llm";
 import {
+  DefaultActionSafetyPolicy,
+  type ActionSafetyPolicy,
+  type ApprovalDecision
+} from "@vibeqa/safety-policy";
+import {
   BrowserActionSchema,
   type BrowserAction,
   type Observation
@@ -37,6 +42,21 @@ export interface AgentOptions {
   maxSteps?: number;
   memory?: Memory;
   evaluator?: Evaluator;
+  safetyPolicy?: ActionSafetyPolicy;
+}
+
+export interface PendingApproval {
+  requestId: string;
+  action: BrowserAction;
+  reason: string;
+  goal: string;
+  observation: Observation | null;
+  stepCount: number;
+  actionHistory: BrowserAction[];
+}
+
+interface PendingApprovalState extends PendingApproval {
+  traceStep: AgentTraceStep;
 }
 
 export class Agent {
@@ -45,7 +65,9 @@ export class Agent {
   private readonly maxSteps: number;
   private readonly memory: Memory;
   private readonly evaluator: Evaluator;
+  private readonly safetyPolicy: ActionSafetyPolicy;
   private pendingAction: BrowserAction | null = null;
+  private pendingApproval: PendingApprovalState | null = null;
   private trace: AgentTrace = { goal: "", steps: [] };
   private currentTraceStep: AgentTraceStep | null = null;
   private actionTraceStep: AgentTraceStep | null = null;
@@ -59,6 +81,7 @@ export class Agent {
     this.maxSteps = options.maxSteps ?? 20;
     this.memory = options.memory ?? new Memory();
     this.evaluator = options.evaluator ?? new Evaluator();
+    this.safetyPolicy = options.safetyPolicy ?? new DefaultActionSafetyPolicy();
   }
 
   async run(goal: string): Promise<AgentState> {
@@ -69,6 +92,7 @@ export class Agent {
     this.state = createAgentState(goal);
     this.memory.clear();
     this.pendingAction = null;
+    this.pendingApproval = null;
     this.trace = { goal, steps: [] };
     this.currentTraceStep = null;
     this.actionTraceStep = null;
@@ -88,6 +112,7 @@ export class Agent {
     while (
       !this.state.completed &&
       !this.halted &&
+      !this.pendingApproval &&
       this.state.stepCount < this.maxSteps
     ) {
       try {
@@ -99,6 +124,10 @@ export class Agent {
         }
 
         await this.act(action);
+        if (this.pendingApproval || this.halted) {
+          break;
+        }
+
         const evaluation = await this.reflect(action);
         if (!evaluation.shouldContinue) {
           this.state.errors.push(evaluation.reason);
@@ -134,13 +163,18 @@ export class Agent {
 
     const traceStep = this.currentTraceStep ?? this.createTraceStep(observation);
     const prompt = this.createReasoningPrompt(observation);
-    traceStep.thought.prompt = prompt;
+    const priorSensitiveValues = sensitiveValues(this.state.actionHistory);
+    traceStep.thought.prompt = redactTraceText(prompt, priorSensitiveValues);
 
     try {
       const response = await this.llmClient.generate(prompt);
-      traceStep.thought.reasoning = response;
       const action = parseBrowserAction(response);
-      traceStep.action = action;
+      const traceSensitiveValues = action
+        ? [...priorSensitiveValues, ...sensitiveValues([action])]
+        : priorSensitiveValues;
+      traceStep.thought.prompt = redactTraceText(prompt, traceSensitiveValues);
+      traceStep.thought.reasoning = redactTraceText(response, traceSensitiveValues);
+      traceStep.action = action ? sanitizeActionForTrace(action) : null;
       traceStep.result = { success: true };
       this.pendingAction = action;
       this.actionTraceStep = action ? traceStep : null;
@@ -158,25 +192,99 @@ export class Agent {
 
     const traceStep = this.actionTraceStep ?? this.currentTraceStep;
     if (traceStep) {
-      traceStep.action = action;
+      traceStep.action = sanitizeActionForTrace(action);
       this.actionTraceStep = traceStep;
     }
 
     try {
-      await this.executeAction(action);
-      this.state.stepCount += 1;
-      this.state.actionHistory.push(action);
-      this.memory.addAction(action);
-      this.pendingAction = null;
-      if (traceStep) {
-        traceStep.result = { success: true };
+      const decision = await this.safetyPolicy.evaluate(action, {
+        goal: this.state.goal,
+        observation: this.state.currentObservation,
+        actionHistory: this.state.actionHistory
+      });
+      this.recordSafetyDecision(traceStep, decision);
+
+      if (decision.decision === "block") {
+        const message = `Action blocked by safety policy: ${decision.reason}`;
+        this.pendingAction = null;
+        this.state.errors.push(message);
+        this.halted = true;
+        if (traceStep) {
+          traceStep.result = { success: false, error: message };
+        }
+        return;
       }
+
+      if (decision.decision === "require_approval") {
+        if (!traceStep) {
+          throw new Error("A trace step is required to pause for approval.");
+        }
+
+        traceStep.approvalStatus = "pending";
+        traceStep.result = {
+          success: false,
+          error: "Action is awaiting human approval."
+        };
+        this.pendingApproval = {
+          requestId: decision.requestId,
+          action,
+          reason: decision.reason,
+          goal: this.state.goal,
+          observation: this.state.currentObservation,
+          stepCount: this.state.stepCount,
+          actionHistory: [...this.state.actionHistory],
+          traceStep
+        };
+        return;
+      }
+
+      await this.executeAndRecordAction(action, traceStep);
     } catch (error) {
       if (traceStep) {
         this.recordTraceError(traceStep, error);
       }
       throw error;
     }
+  }
+
+  async resumeApproval(requestId: string, approved: boolean): Promise<AgentState> {
+    const pending = this.pendingApproval;
+    if (!pending) {
+      throw new Error("The agent has no pending approval request.");
+    }
+    if (pending.requestId !== requestId) {
+      throw new Error(`Unknown approval request ID: ${requestId}`);
+    }
+
+    this.pendingApproval = null;
+    this.actionTraceStep = pending.traceStep;
+
+    if (!approved) {
+      const message = "Action denied by human approval.";
+      pending.traceStep.approvalStatus = "denied";
+      pending.traceStep.result = { success: false, error: message };
+      this.pendingAction = null;
+      this.state.errors.push(message);
+      this.halted = true;
+      return this.state;
+    }
+
+    pending.traceStep.approvalStatus = "approved";
+    try {
+      await this.executeAndRecordAction(pending.action, pending.traceStep);
+      const evaluation = await this.reflect(pending.action);
+      if (!evaluation.shouldContinue) {
+        this.state.errors.push(evaluation.reason);
+        this.halted = true;
+      }
+    } catch (error) {
+      this.recordTraceError(pending.traceStep, error);
+      this.recordError(error);
+      this.halted = true;
+      return this.state;
+    }
+
+    return this.loop();
   }
 
   async reflect(
@@ -207,6 +315,23 @@ export class Agent {
 
   getMemory(): Memory {
     return this.memory;
+  }
+
+  getPendingApproval(): PendingApproval | null {
+    const pending = this.pendingApproval;
+    if (!pending) {
+      return null;
+    }
+
+    return {
+      requestId: pending.requestId,
+      action: { ...pending.action },
+      reason: pending.reason,
+      goal: pending.goal,
+      observation: pending.observation,
+      stepCount: pending.stepCount,
+      actionHistory: pending.actionHistory.map((action) => ({ ...action }))
+    };
   }
 
   getTrace(): AgentTrace {
@@ -269,6 +394,35 @@ export class Agent {
     }
   }
 
+  private async executeAndRecordAction(
+    action: BrowserAction,
+    traceStep: AgentTraceStep | null
+  ): Promise<void> {
+    await this.executeAction(action);
+    this.state.stepCount += 1;
+    this.state.actionHistory.push(action);
+    this.memory.addAction(action);
+    this.pendingAction = null;
+    if (traceStep) {
+      traceStep.result = { success: true };
+    }
+  }
+
+  private recordSafetyDecision(
+    traceStep: AgentTraceStep | null,
+    decision: ApprovalDecision
+  ): void {
+    if (!traceStep) {
+      return;
+    }
+
+    traceStep.safetyDecision = decision.decision;
+    traceStep.safetyReason = decision.reason;
+    if (decision.decision === "require_approval") {
+      traceStep.approvalRequestId = decision.requestId;
+    }
+  }
+
   private recordError(error: unknown): void {
     const message = errorMessage(error);
     this.state.errors.push(message);
@@ -296,7 +450,10 @@ export class Agent {
   private recordObservation(observation: Observation, traceStep: AgentTraceStep): void {
     this.state.currentObservation = observation;
     this.memory.addObservation(observation);
-    traceStep.observation = observation;
+    traceStep.observation = sanitizeObservationForTrace(
+      observation,
+      sensitiveValues(this.state.actionHistory)
+    );
     traceStep.result = { success: true };
     this.currentTraceStep = traceStep;
   }
@@ -337,4 +494,86 @@ function stripJsonCodeFence(response: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown agent error";
+}
+
+function sanitizeActionForTrace(action: BrowserAction): BrowserAction {
+  if (action.type === "type" && isSensitiveSelector(action.selector)) {
+    return { ...action, value: "[REDACTED]" };
+  }
+
+  return { ...action };
+}
+
+function sensitiveValues(actions: readonly BrowserAction[]): string[] {
+  return actions.flatMap((action) =>
+    action.type === "type" &&
+    isSensitiveSelector(action.selector) &&
+    action.value.length > 0
+      ? [action.value]
+      : []
+  );
+}
+
+function isSensitiveSelector(selector: string): boolean {
+  return /password|passwd|secret|token|api[-_]?key|credential/i.test(selector);
+}
+
+function redactTraceText(text: string, values: readonly string[]): string {
+  let redacted = text;
+  for (const value of values) {
+    redacted = redacted.split(value).join("[REDACTED]");
+  }
+
+  return redacted.replace(
+    /("selector"\s*:\s*"[^"]*(?:password|passwd|secret|token|api[-_]?key|credential)[^"]*"\s*,\s*"value"\s*:\s*")[^"]*(")/gi,
+    "$1[REDACTED]$2"
+  );
+}
+
+function sanitizeObservationForTrace(
+  observation: Observation,
+  values: readonly string[]
+): Observation {
+  if (values.length === 0) {
+    return observation;
+  }
+
+  const redact = (value: string): string => redactTraceText(value, values);
+  return {
+    ...observation,
+    url: redact(observation.url),
+    title: redact(observation.title),
+    metadata: {
+      ...observation.metadata,
+      url: redact(observation.metadata.url),
+      title: redact(observation.metadata.title)
+    },
+    consoleErrors: observation.consoleErrors.map((error) => ({
+      ...error,
+      text: redact(error.text),
+      location: error.location
+        ? { ...error.location, url: redact(error.location.url) }
+        : null
+    })),
+    accessibility: {
+      ...observation.accessibility,
+      headings: observation.accessibility.headings.map((heading) => ({
+        ...heading,
+        text: redact(heading.text)
+      })),
+      landmarks: observation.accessibility.landmarks.map((landmark) => ({
+        ...landmark,
+        name: landmark.name ? redact(landmark.name) : null
+      }))
+    },
+    elements: observation.elements.map((element) => ({
+      ...element,
+      accessibleName: element.accessibleName ? redact(element.accessibleName) : null,
+      text: redact(element.text)
+    })),
+    textSample: redact(observation.textSample),
+    screenshotPath: observation.screenshotPath
+      ? redact(observation.screenshotPath)
+      : null
+  };
 }

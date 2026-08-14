@@ -1,4 +1,5 @@
 import type { BrowserAction, Observation } from "@vibeqa/schemas";
+import type { ApprovalDecision } from "@vibeqa/safety-policy";
 
 import type { EvaluationResult } from "./evaluator.js";
 
@@ -19,5 +20,9 @@ export interface AgentTraceStep {
     success: boolean;
     error?: string;
   };
+  safetyDecision?: ApprovalDecision["decision"];
+  safetyReason?: string;
+  approvalRequestId?: string;
+  approvalStatus?: "pending" | "approved" | "denied";
   evaluation?: EvaluationResult;
 }
