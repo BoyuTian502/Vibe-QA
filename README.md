@@ -1,87 +1,87 @@
-# VibeQA
+# Vibe-QA
 
-VibeQA is an autonomous AI QA agent for websites built by indie developers, small teams, and vibe-coding users.
+Vibe-QA is a local-first website testing agent that operates a real browser,
+evaluates what happened after each action, and produces evidence-backed bug
+reports. It is built for indie developers and small teams that need useful QA
+coverage without maintaining a large end-to-end test suite.
 
-A user provides:
+The current Alpha-0 prototype combines deterministic functional testing,
+LLM-ready planning, bounded autonomous exploration, human approval for risky
+actions, and a resettable SaaS-style benchmark with five seeded defects.
 
-- A website URL
-- A short description of the product
-- A test account or authenticated browser session
-- Optional critical user flows
-- Safety restrictions
+## Problem
 
-VibeQA then:
+Fast-moving web products often outgrow manual smoke testing before a team can
+invest in dedicated QA. Important workflows may silently regress, and failures
+such as browser exceptions can be easy to miss even when the page still looks
+correct.
 
-1. Opens the website in an isolated Chromium browser.
-2. Authenticates when required.
-3. Understands the visible product structure.
-4. Executes core functional and regression checks.
-5. Performs bounded exploratory testing.
-6. Captures console, network, screenshot, video, and trace evidence.
-7. Reproduces suspected failures.
-8. Produces developer-oriented bug reports and fix prompts.
+Traditional scripted tests are valuable, but every new workflow requires more
+test code and maintenance. Vibe-QA explores a complementary approach: give an
+agent a goal, let it interact through a constrained browser interface, and keep
+the complete trajectory available for review.
 
-## Product principle
+## Solution
 
-VibeQA is not primarily a test-code generator.
+Vibe-QA provides:
 
-It is a stateful website-testing agent that forms hypotheses, runs controlled experiments, validates failures, and reports evidence.
+- A typed Playwright browser controller for navigation, interaction, observation,
+  screenshots, and console-error capture.
+- An agent runtime that follows `Observe -> Think -> Act -> Reflect`, with memory,
+  evaluation, step limits, and an explainable execution trace.
+- A deterministic safety policy that can allow, block, or pause an action for
+  human approval without losing run state.
+- A functional test engine that turns structured scenarios into `TestResult` and
+  `BugReport` output.
+- An exploration engine that fingerprints page states, generates and ranks
+  candidates, tracks coverage, and avoids repeated actions.
+- An abstract planning and LLM layer with mock, OpenAI-compatible, and Ollama
+  clients, without coupling the agent to one provider.
 
-## Current phase
+The project is intentionally local and benchmark-driven. It is not a hosted QA
+platform, and the portfolio demo does not require an API key or paid model.
 
-The project is in the Alpha-0 prototype phase.
+## Architecture
 
-Do not build a full SaaS product yet. The immediate goal is to prove that the agent can reliably test one controlled benchmark website and detect known functional bugs.
-
-## Repository structure
-
-```text
-vibeqa/
-├── apps/
-│   ├── benchmark-app/
-│   ├── cli/
-│   └── worker/
-├── packages/
-│   ├── schemas/
-│   ├── prompts/
-│   ├── browser-tools/
-│   └── test-fixtures/
-├── docs/
-│   ├── PRD.md
-│   ├── ARCHITECTURE.md
-│   ├── AGENT_DESIGN.md
-│   ├── MVP_SCOPE.md
-│   └── DEVELOPMENT_PLAN.md
-└── README.md
+```mermaid
+flowchart LR
+    Goal["Test request"] --> Planner["Planner<br/>deterministic or LLM-backed"]
+    Planner --> Case["Structured TestCase"]
+    Case --> Engine["Test Engine"]
+    ExploreGoal["Exploration goal"] --> Explorer["Explorer<br/>state coverage + candidate ranking"]
+    Engine --> Agent["Agent Core<br/>Observe -> Think -> Act -> Reflect"]
+    Explorer --> Agent
+    LLM["LLMClient abstraction<br/>Mock / OpenAI-compatible / Ollama"] -.-> Planner
+    LLM -.-> Agent
+    Agent --> Safety{"Safety Policy"}
+    Safety -->|allow| Browser["Playwright BrowserController"]
+    Safety -->|require approval| Approval["Pause and resume"]
+    Safety -->|block| Runtime
+    Approval --> Agent
+    Browser <--> Website["Website under test"]
+    Browser --> Observation["Observation<br/>page, accessibility, elements, console"]
+    Observation --> Agent
+    Agent --> Runtime["Memory + Evaluator + Trace"]
+    Runtime --> Evidence["TestResult + BugReport<br/>screenshots + trace"]
+    Engine --> Evidence
 ```
 
-## Alpha-0 command
+All browser operations use typed `BrowserAction` values. The safety gate runs
+before execution, and observations flow back through the evaluator and trace so
+the final result can be inspected rather than taken on trust.
 
-The intended prototype interface is:
+| Area | Existing implementation |
+| --- | --- |
+| Browser control | `browser-tools`, `browser-playwright` |
+| Agent runtime | `agent-core`, including memory, evaluator, trace, and approvals |
+| Planning and models | `planner`, `llm` |
+| Functional execution | `test-engine`, `test-runner` |
+| Autonomous exploration | `explorer` |
+| Safety and contracts | `safety-policy`, `schemas` |
+| Local product under test | `apps/benchmark-app` |
+| Demo and CLI | `apps/cli` |
 
-```bash
-npm run vibeqa -- \
-  --url http://localhost:3000 \
-  --description "A project management application" \
-  --mode exploration \
-  --storage-state .auth/test-user.json \
-  --max-actions 40
-```
-
-Expected output:
-
-```text
-run-output/
-├── report.json
-├── report.html
-├── bugs.json
-├── actions.jsonl
-├── observations.jsonl
-├── trace.zip
-└── screenshots/
-```
-
-## Technical Demo
+## Demo
 
 Run the complete local browser-testing demonstration from the repository root:
 
@@ -89,9 +89,9 @@ Run the complete local browser-testing demonstration from the repository root:
 npm run demo:qa
 ```
 
-The command starts the benchmark application, opens a visible Chromium browser,
-logs in with the local benchmark account, triggers the seeded fragile-widget bug,
-and prints the resulting BugReport. Reports, traces, and real screenshots are saved
+The command builds the workspace, starts the benchmark application, opens a
+visible Chromium browser, signs in, triggers the existing fragile-widget defect,
+and prints the real evaluation result. Reports, traces, and screenshots are saved
 under `run-output/demo/<timestamp>/`.
 
 Use the successful login scenario or keep the browser open for a presentation:
@@ -105,15 +105,63 @@ npm run demo:qa -- --keep-open
 For a short explanation, presenter script, and example output, see the
 [Technical Demo Guide](docs/TECHNICAL_DEMO.md).
 
-## Engineering rules
+The default demo is deterministic so it remains reliable during a presentation.
+The repository also includes LLM-backed planner implementations behind the same
+interfaces, but no external model is required for this flow.
 
-- Use TypeScript across the Alpha-0 stack.
-- Use Playwright for browser control.
-- Use LangGraph.js for orchestration and persistent state.
-- Use Zod for every LLM and tool boundary.
-- Never allow the LLM to execute arbitrary browser code.
-- Browser actions must use an allow-listed typed tool interface.
-- Never expose passwords or authentication tokens to the LLM.
-- Every confirmed bug must include reproducible evidence.
-- Safety policy enforcement must be deterministic, not prompt-only.
-- Keep the first implementation narrow and measurable.
+## Development
+
+Requirements: Node.js 18 or later and a supported Chrome or Chromium browser.
+
+```bash
+npm install
+npm run build
+npm test
+npm run lint
+npm run format:check
+```
+
+The strict TypeScript monorepo contains focused unit and browser integration tests
+for the benchmark, browser controllers, agent runtime, safety gate, planner, test
+engine, runner, explorer, and demo composition.
+
+## Repository Map
+
+```text
+apps/
+  benchmark-app/       Resettable SaaS-style target with five seeded bugs
+  cli/                 CLI and visible technical demo
+  worker/              Worker application boundary
+packages/
+  agent-core/          Agent loop, memory, evaluator, trace, approvals
+  browser-tools/       Browser session abstraction and observations
+  browser-playwright/  Playwright BrowserController implementation
+  explorer/            Page-state coverage and candidate exploration
+  llm/                 Provider-neutral clients and test doubles
+  planner/             Browser-action and TestCase planners
+  safety-policy/       Deterministic action risk decisions
+  schemas/             Shared browser action and observation contracts
+  test-engine/         Functional execution, evaluation, and BugReport output
+  test-runner/         JSON scenario loading and ordered execution
+docs/                  Product, architecture, agent, scope, and demo documents
+```
+
+## Future Improvements
+
+- Persist website memory across runs and compare page-state changes over time.
+- Prioritize regression testing around changed or historically fragile workflows.
+- Expand semantic hypothesis generation while retaining deterministic baselines.
+- Add stronger reproduction and confidence scoring for suspected failures.
+- Broaden evidence collection and benchmark evaluation without weakening the
+  typed browser boundary or human approval gate.
+
+## Project Status
+
+Vibe-QA is an Alpha-0 engineering prototype. The implemented foundation proves a
+local, explainable, safety-aware browser testing loop against a controlled
+benchmark. Production persistence, cloud execution, a hosted UI, and multi-browser
+support remain outside the current scope.
+
+For deeper design context, see [Architecture](docs/ARCHITECTURE.md),
+[Agent Design](docs/AGENT_DESIGN.md), [MVP Scope](docs/MVP_SCOPE.md), and the
+[Implementation Plan](docs/IMPLEMENTATION_PLAN.md).
