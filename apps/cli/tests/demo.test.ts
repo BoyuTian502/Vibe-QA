@@ -15,10 +15,10 @@ describe("technical demo scenarios", () => {
     const bug = createDemoScenario("bug", baseUrl);
 
     expect(login.startUrl).toBe(`${baseUrl}/login`);
-    expect(login.steps.at(-1)?.name).toBe("Verify authenticated dashboard");
+    expect(login.steps.at(-1)?.name).toBe("Confirm the private dashboard opened");
     expect(bug.steps).toHaveLength(login.steps.length + 1);
     expect(bug.steps.at(-1)).toMatchObject({
-      name: "Run fragile dashboard widget",
+      name: "Click the fragile dashboard widget",
       action: { type: "click", selector: "#trigger-client-error" }
     });
   });
@@ -80,7 +80,7 @@ describe("runTechnicalDemo", () => {
       expect.arrayContaining([
         expect.objectContaining({
           category: "console",
-          stepName: "Run fragile dashboard widget",
+          stepName: "Click the fragile dashboard widget",
           description: expect.stringContaining("BUG-BENCH-005")
         })
       ])

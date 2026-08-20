@@ -11,7 +11,7 @@ export function createDemoScenario(
 ): TestCase {
   const loginSteps: TestCase["steps"] = [
     {
-      name: "Enter test account email",
+      name: "Enter the demo email address",
       action: {
         type: "type",
         selector: 'input[name="email"]',
@@ -19,7 +19,7 @@ export function createDemoScenario(
       }
     },
     {
-      name: "Enter test account password",
+      name: "Enter the demo password securely",
       action: {
         type: "type",
         selector: 'input[name="password"]',
@@ -27,11 +27,11 @@ export function createDemoScenario(
       }
     },
     {
-      name: "Submit login",
+      name: "Sign in",
       action: { type: "click", selector: 'button[type="submit"]' }
     },
     {
-      name: "Verify authenticated dashboard",
+      name: "Confirm the private dashboard opened",
       action: { type: "wait", ms: 600 },
       expected: {
         url: `${benchmarkUrl}/dashboard`,
@@ -42,19 +42,19 @@ export function createDemoScenario(
 
   if (scenario === "login") {
     return {
-      goal: "Verify the benchmark login workflow",
+      goal: "Confirm that a user can sign in and reach the private dashboard",
       startUrl: `${benchmarkUrl}/login`,
       steps: loginSteps
     };
   }
 
   return {
-    goal: "Detect the fragile dashboard widget failure",
+    goal: "Find and document the dashboard widget failure",
     startUrl: `${benchmarkUrl}/login`,
     steps: [
       ...loginSteps,
       {
-        name: "Run fragile dashboard widget",
+        name: "Click the fragile dashboard widget",
         action: { type: "click", selector: "#trigger-client-error" },
         expected: { requiredText: "Widget completed successfully" }
       }

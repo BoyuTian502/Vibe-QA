@@ -21,9 +21,9 @@ const options = program.opts<{ scenario: string; keepOpen: boolean }>();
 try {
   const scenario = parseDemoScenario(options.scenario);
   printHeader();
-  console.log("[1] Starting benchmark application...");
+  console.log("[1] Preparing the sample website...");
 
-  await runTechnicalDemo({
+  const demo = await runTechnicalDemo({
     scenario,
     keepOpen: options.keepOpen,
     onEvent: printEvent,
@@ -37,30 +37,40 @@ try {
     },
     waitForKeepOpen: waitForEnter
   });
+  console.log("\n[5] Closing the demo...");
+  console.log(
+    demo.cleanup.browserClosed && demo.cleanup.benchmarkClosed
+      ? "    [OK] Browser and sample website closed cleanly"
+      : "    [WARNING] Some demo resources may still be running"
+  );
 } catch (error) {
-  console.error(`\nDemo failed: ${errorMessage(error)}`);
+  console.error(`\nThe demo could not finish: ${errorMessage(error)}`);
+  console.error(
+    "Please check that a supported Chrome or Chromium browser is installed."
+  );
   process.exitCode = 1;
 }
 
 function printHeader(): void {
   console.log("--------------------------------------------------");
   console.log("Vibe-QA Technical Demo");
-  console.log("--------------------------------------------------\n");
+  console.log("--------------------------------------------------");
+  console.log("Watch Vibe-QA test a sample website in a real browser.\n");
 }
 
 function printEvent(event: DemoEvent): void {
   switch (event.type) {
     case "benchmark-ready":
-      console.log("    [OK] ready");
-      console.log(`\nBenchmark:\n${event.url}\n`);
-      console.log("[2] Launching visible browser...");
+      console.log("    [OK] Sample website is ready");
+      console.log(`\nWebsite under test:\n${event.url}\n`);
+      console.log("[2] Opening a browser you can watch...");
       return;
     case "browser-ready":
-      console.log("    [OK] Chromium launched\n");
+      console.log("    [OK] Browser opened\n");
       return;
     case "test-started":
-      console.log(`Goal:\n${event.goal}\n`);
-      console.log("[3] Running test...");
+      console.log(`What Vibe-QA will check:\n${event.goal}\n`);
+      console.log("[3] Testing the website step by step...");
       return;
     case "evidence-saved":
       return;
@@ -74,61 +84,71 @@ function printResult(
   outputDirectory: string
 ): void {
   const setupSucceeded = result.executedSteps.length > 0;
-  console.log(`    ${setupSucceeded ? "[OK]" : "[FAIL]"} Navigate to login`);
+  console.log(`    ${setupSucceeded ? "[OK]" : "[FAIL]"} Open the sign-in page`);
   for (const step of result.executedSteps) {
-    console.log(`    ${step.status === "passed" ? "[OK]" : "[FAIL]"} ${step.name}`);
+    console.log(`    ${step.status === "passed" ? "[OK]" : "[ISSUE]"} ${step.name}`);
   }
 
-  console.log("\n[4] Evaluating evidence...");
+  console.log("\n[4] Reviewing what happened...");
   const consoleBugs = result.bugReports.filter((bug) => bug.category === "console");
   console.log(
     consoleBugs.length > 0
-      ? `    [DETECTED] ${consoleBugs.length} console/page error(s) captured`
-      : "    [OK] no unexpected console/page errors"
+      ? `    [ISSUE] The page reported ${consoleBugs.length} JavaScript error(s)`
+      : "    [OK] The page reported no unexpected JavaScript errors"
   );
 
   console.log("\n--------------------------------------------------");
-  console.log(`TEST RESULT: ${result.status.toUpperCase()}`);
+  console.log(
+    result.status === "failed"
+      ? "WEBSITE TEST RESULT: ISSUE FOUND"
+      : "WEBSITE TEST RESULT: PASSED"
+  );
   console.log("--------------------------------------------------\n");
 
   if (result.status === "failed") {
-    printBug(primaryBug(result.bugReports), tracePath);
+    printBug(primaryBug(result.bugReports));
   } else {
-    console.log("No bug detected in the selected functional scenario.\n");
+    console.log("Vibe-QA completed the selected journey without finding a problem.\n");
   }
 
-  console.log("Evidence:");
-  for (const screenshot of result.screenshots) {
-    console.log(`- screenshot: ${screenshot}`);
+  console.log("Saved evidence:");
+  console.log(`- ${result.screenshots.length} screenshot(s)`);
+  const screenshot = primaryBug(result.bugReports)?.evidence.screenshot;
+  if (screenshot) {
+    console.log(`- issue screenshot: ${screenshot}`);
   }
-  console.log(`- report: ${reportPath}`);
-  console.log(`- trace: ${tracePath}`);
-  console.log(`\nOutput directory:\n${outputDirectory}`);
+  console.log(`- test report: ${reportPath}`);
+  console.log(`- step-by-step agent trace: ${tracePath}`);
+  console.log(`\nAll demo files:\n${outputDirectory}`);
   console.log("\n--------------------------------------------------");
 }
 
-function printBug(bug: BugReport | null, tracePath: string): void {
+function printBug(bug: BugReport | null): void {
   if (!bug) {
-    console.log("Bug detected, but no structured BugReport was generated.\n");
+    console.log(
+      "Vibe-QA detected a failure, but no detailed issue report was generated.\n"
+    );
     return;
   }
 
-  console.log(`Bug detected:\n${bug.title}\n`);
-  console.log("Expected:");
+  console.log(`Issue found:\n${friendlyBugTitle(bug)}\n`);
+  console.log("What should have happened:");
   console.log("The dashboard action completes without a browser error.\n");
-  console.log("Actual:");
+  console.log("What actually happened:");
   console.log(`${bug.description}\n`);
   if (bug.evidence.consoleErrors.length > 0) {
-    console.log("Console/page error:");
+    console.log("Error reported by the page:");
     for (const consoleError of bug.evidence.consoleErrors) {
       console.log(`- ${consoleError.type}: ${consoleError.text}`);
     }
     console.log();
   }
-  if (bug.evidence.screenshot) {
-    console.log(`Screenshot:\n${bug.evidence.screenshot}\n`);
-  }
-  console.log(`Trace:\n${tracePath}\n`);
+}
+
+function friendlyBugTitle(bug: BugReport): string {
+  return bug.category === "console"
+    ? `The page reported an error during: ${bug.stepName}`
+    : bug.title;
 }
 
 function primaryBug(bugs: BugReport[]): BugReport | null {

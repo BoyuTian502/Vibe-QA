@@ -102,6 +102,9 @@ npm run demo:qa -- --scenario bug
 npm run demo:qa -- --keep-open
 ```
 
+For a short explanation, presenter script, and example output, see the
+[Technical Demo Guide](docs/TECHNICAL_DEMO.md).
+
 ## Engineering rules
 
 - Use TypeScript across the Alpha-0 stack.
