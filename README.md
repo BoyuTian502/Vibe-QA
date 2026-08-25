@@ -155,12 +155,22 @@ execute through the existing Agent and safety policy; functional and regression
 use the Test Engine, while exploratory mode uses the existing
 `ExplorationSession`. Browser execution remains local through Playwright.
 
+For login-required sites, enable **Temporary login** and enter a username and
+password. Credentials remain in memory only for that run: the planner sees
+credential placeholders, the browser receives real values only when filling the
+login fields, and the values are cleared when execution ends. Every run uses a
+fresh Playwright browser context. Credential fields and matching page content
+are masked in screenshots and redacted from observations, errors, reports,
+traces, request APIs, and AI bug-analysis input. Only the non-sensitive fact
+that temporary authentication was used is saved.
+
 The request page shows queued, running, and completed states. Finished runs save
 the standard `report.json`, `trace.json`, and screenshots under
 `run-output/demo/<timestamp>-request-<id>/`, so they appear automatically in
-History and Run Details. The selected mode, target page, objective, and expected
-behavior are stored with the report. Configuration fields reject embedded
-credentials and common secret assignments.
+History and Run Details. The selected mode, target page, objective, expected
+behavior, and authentication-used flag are stored with the report. Configuration
+fields reject embedded credentials and common secret assignments; login secrets
+belong only in the temporary credential fields.
 
 ## Development
 

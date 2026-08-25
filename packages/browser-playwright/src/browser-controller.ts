@@ -50,6 +50,14 @@ export class PlaywrightBrowserController implements BrowserController {
     return await this.session.screenshot(options);
   }
 
+  registerSensitiveSelector(selector: string): void {
+    this.session.registerSensitiveSelector(selector);
+  }
+
+  registerSensitiveValue(value: string): void {
+    this.session.registerSensitiveValue(value);
+  }
+
   async assert(selector: string, containsText: string): Promise<void> {
     await this.session.assert(selector, containsText);
   }

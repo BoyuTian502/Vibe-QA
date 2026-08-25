@@ -5,6 +5,8 @@ import { join } from "node:path";
 import type { BrowserController } from "@vibeqa/agent-core";
 import { PlaywrightBrowserController } from "@vibeqa/browser-playwright";
 import {
+  actionKey,
+  createElementKey,
   ExplorationSession,
   generateActionCandidates,
   type ActionCandidate,
@@ -23,11 +25,28 @@ import {
   type TestStatus
 } from "@vibeqa/test-engine";
 
+import {
+  redactCredentialValues,
+  SecureAuthenticatedBrowserController,
+  TEMPORARY_PASSWORD_PLACEHOLDER,
+  TEMPORARY_USERNAME_PLACEHOLDER
+} from "./secure-credentials.js";
+import type { TemporaryLoginCredentials } from "./secure-credentials.js";
+
 export interface CreateTestRequestInput {
   websiteUrl: string;
   objective: string;
   expectedBehavior: string;
   mode: QATestMode;
+  credentials: TemporaryLoginCredentials | null;
+}
+
+export interface StoredTestConfiguration {
+  websiteUrl: string;
+  objective: string;
+  expectedBehavior: string;
+  mode: QATestMode;
+  authenticationUsed: boolean;
 }
 
 export type QATestMode = "functional" | "exploratory" | "regression";
@@ -40,6 +59,7 @@ export interface UserTestRequest {
   objective: string;
   expectedBehavior: string;
   mode: QATestMode;
+  authenticationUsed: boolean;
   status: UserTestRequestStatus;
   createdAt: string;
   startedAt: string | null;
@@ -77,7 +97,7 @@ export interface TestArtifactStore {
   save(
     runId: string,
     result: TestResult,
-    configuration: CreateTestRequestInput
+    configuration: StoredTestConfiguration
   ): Promise<void>;
 }
 
@@ -123,8 +143,15 @@ export class UserTestWorkflow {
   }
 
   submit(input: CreateTestRequestInput): UserTestRequest {
-    const validated = validateCreateTestRequest(input);
+    let validated: CreateTestRequestInput;
+    try {
+      validated = validateCreateTestRequest(input);
+    } catch (error) {
+      input.credentials?.clear();
+      throw error;
+    }
     if (!this.executor || !this.supports(validated.mode)) {
+      validated.credentials?.clear();
       throw new TestWorkflowUnavailableError(validated.mode);
     }
     const request: UserTestRequest = {
@@ -133,6 +160,7 @@ export class UserTestWorkflow {
       objective: validated.objective,
       expectedBehavior: validated.expectedBehavior,
       mode: validated.mode,
+      authenticationUsed: validated.credentials !== null,
       status: "queued",
       createdAt: this.now().toISOString(),
       startedAt: null,
@@ -179,9 +207,10 @@ export class UserTestWorkflow {
       request.testStatus = execution.status;
     } catch (error) {
       request.status = "failed";
-      request.error = errorMessage(error);
+      request.error = errorMessage(error, input.credentials);
     } finally {
       request.completedAt = this.now().toISOString();
+      input.credentials?.clear();
     }
 
     return request;
@@ -208,29 +237,37 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
     input: CreateTestRequestInput,
     requestId: string
   ): Promise<UserTestExecution> {
-    const testCase =
-      input.mode === "exploratory" ? null : await this.createTestCase(input);
-    const runId = createRunId(this.now(), requestId);
-    const browser = await this.launchBrowser();
+    let browser: ClosableBrowserController | null = null;
 
     try {
+      const testCase =
+        input.mode === "exploratory" ? null : await this.createTestCase(input);
+      const runId = createRunId(this.now(), requestId);
+      browser = await this.launchBrowser();
+      const executionBrowser = input.credentials
+        ? new SecureAuthenticatedBrowserController(browser, input.credentials)
+        : browser;
       const result = sanitizeTestResult(
         input.mode === "exploratory"
           ? await this.runExploration(
-              browser,
+              executionBrowser,
               input,
               this.artifactStore.screenshotDirectory(runId)
             )
           : await new TestTask({
-              browser,
+              browser: executionBrowser,
               testCase: requireTestCase(testCase),
               screenshotDirectory: this.artifactStore.screenshotDirectory(runId)
-            }).run()
+            }).run(),
+        input.credentials
       );
-      await this.artifactStore.save(runId, result, input);
+      await this.artifactStore.save(runId, result, storedConfiguration(input));
       return { runId, status: result.status };
+    } catch (error) {
+      throw new Error(errorMessage(error, input.credentials));
     } finally {
-      await browser.close();
+      input.credentials?.clear();
+      await browser?.close();
     }
   }
 
@@ -260,7 +297,12 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
       browser: new EvidenceBrowserController(browser, screenshotDirectory),
       candidateGenerator: (observation, stateFingerprint, state) =>
         sameOriginCandidates(
-          generateActionCandidates(observation, stateFingerprint, state),
+          authenticatedCandidates(
+            observation,
+            stateFingerprint,
+            state,
+            input.credentials !== null
+          ),
           targetOrigin
         )
     });
@@ -271,6 +313,77 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
     });
     return explorationToTestResult(result, input.objective);
   }
+}
+
+function authenticatedCandidates(
+  observation: Observation,
+  stateFingerprint: string,
+  state: Parameters<typeof generateActionCandidates>[2],
+  authenticationAvailable: boolean
+): ActionCandidate[] {
+  const candidates = generateActionCandidates(observation, stateFingerprint, state);
+  if (!authenticationAvailable) {
+    return candidates;
+  }
+
+  const credentialCandidates: ActionCandidate[] = observation.elements.flatMap(
+    (element): ActionCandidate[] => {
+      if (!element.visible || !element.enabled || !element.editable) {
+        return [];
+      }
+      const credentialKind = classifyCredentialElement(
+        element.selector,
+        element.inputType
+      );
+      if (!credentialKind) {
+        return [];
+      }
+      const action: BrowserAction = {
+        type: "type",
+        selector: element.selector,
+        value:
+          credentialKind === "password"
+            ? TEMPORARY_PASSWORD_PLACEHOLDER
+            : TEMPORARY_USERNAME_PLACEHOLDER
+      };
+      const key = actionKey(action);
+      if (
+        state.executedActions.some(
+          (record) =>
+            record.fromStateFingerprint === stateFingerprint && record.actionKey === key
+        ) ||
+        state.failedActions.some(
+          (record) =>
+            record.stateFingerprint === stateFingerprint && record.actionKey === key
+        )
+      ) {
+        return [];
+      }
+      return [
+        {
+          id: `candidate-${stateFingerprint}-credential-${element.id}`,
+          stateFingerprint,
+          elementId: element.id,
+          elementKey: createElementKey(element),
+          action,
+          score: credentialKind === "username" ? 180 : 170,
+          reasons: ["temporary authentication field"]
+        }
+      ];
+    }
+  );
+
+  const credentialSelectors = new Set(
+    credentialCandidates.map((candidate) =>
+      candidate.action.type === "type" ? candidate.action.selector : ""
+    )
+  );
+  return [...credentialCandidates, ...candidates].filter(
+    (candidate) =>
+      candidate.action.type !== "type" ||
+      !credentialSelectors.has(candidate.action.selector) ||
+      credentialCandidates.includes(candidate)
+  );
 }
 
 function sameOriginCandidates(
@@ -354,7 +467,7 @@ export class FileTestArtifactStore implements TestArtifactStore {
   async save(
     runId: string,
     result: TestResult,
-    configuration: CreateTestRequestInput
+    configuration: StoredTestConfiguration
   ): Promise<void> {
     const outputDirectory = join(this.outputRoot, runId);
     await mkdir(outputDirectory, { recursive: true });
@@ -464,7 +577,8 @@ export function validateCreateTestRequest(
     websiteUrl: parsedUrl.toString(),
     objective,
     expectedBehavior,
-    mode: input.mode
+    mode: input.mode,
+    credentials: input.credentials
   };
 }
 
@@ -477,6 +591,9 @@ function buildPlannerRequest(input: CreateTestRequestInput): string {
     `Testing mode: ${testModeLabel(input.mode)}`,
     `Objective: ${input.objective}`,
     `Expected behavior: ${input.expectedBehavior}`,
+    input.credentials
+      ? `Authentication: Temporary credentials are available only during browser execution. Use ${TEMPORARY_USERNAME_PLACEHOLDER} for the username or email value and ${TEMPORARY_PASSWORD_PLACEHOLDER} for the password value. Never invent or request literal credentials.`
+      : "Authentication: No temporary credentials were supplied.",
     modeInstruction,
     "Include at least one explicit assertion or expected result."
   ].join("\n");
@@ -582,13 +699,16 @@ function explorationFindingToBugReport(
   };
 }
 
-function sanitizeTestResult(result: TestResult): TestResult {
+function sanitizeTestResult(
+  result: TestResult,
+  credentials: TemporaryLoginCredentials | null = null
+): TestResult {
   const sensitiveValues = result.executedSteps.flatMap((step) =>
     step.action.type === "type" && isSensitiveSelector(step.action.selector)
       ? [step.action.value]
       : []
   );
-  const sanitized = structuredClone(result);
+  const sanitized = redactCredentialValues(structuredClone(result), credentials);
   sanitized.executedSteps = sanitized.executedSteps.map((step) => ({
     ...step,
     action: sanitizeAction(step.action)
@@ -612,7 +732,9 @@ function sanitizeAction(action: BrowserAction): BrowserAction {
 }
 
 function isSensitiveSelector(selector: string): boolean {
-  return /password|passwd|secret|token|api[-_]?key|credential/i.test(selector);
+  return /password|passwd|secret|token|api[-_]?key|credential|username|user-name|email|login|account/i.test(
+    selector
+  );
 }
 
 function redactText(
@@ -628,6 +750,32 @@ function redactText(
 
 function containsLikelySecret(value: string): boolean {
   return /(?:password|passwd|api[_ -]?key|secret|token)\s*[:=]\s*\S+/i.test(value);
+}
+
+function classifyCredentialElement(
+  selector: string,
+  inputType: string | null | undefined
+): "username" | "password" | null {
+  if (inputType?.toLowerCase() === "password" || /password|passwd/i.test(selector)) {
+    return "password";
+  }
+  if (
+    inputType?.toLowerCase() === "email" ||
+    /username|user-name|email|login|account/i.test(selector)
+  ) {
+    return "username";
+  }
+  return null;
+}
+
+function storedConfiguration(input: CreateTestRequestInput): StoredTestConfiguration {
+  return {
+    websiteUrl: input.websiteUrl,
+    objective: input.objective,
+    expectedBehavior: input.expectedBehavior,
+    mode: input.mode,
+    authenticationUsed: input.credentials !== null
+  };
 }
 
 function testModeLabel(mode: QATestMode): string {
@@ -670,8 +818,13 @@ function copyRequest(request: UserTestRequest): UserTestRequest {
   return { ...request };
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Unexpected test execution error";
+function errorMessage(
+  error: unknown,
+  credentials: TemporaryLoginCredentials | null = null
+): string {
+  const message =
+    error instanceof Error ? error.message : "Unexpected test execution error";
+  return credentials ? credentials.redact(message) : message;
 }
 
 async function writeJson(path: string, value: unknown): Promise<void> {

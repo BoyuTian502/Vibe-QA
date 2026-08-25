@@ -29,6 +29,8 @@ export interface ScreenshotOptions {
 
 export class BrowserSession {
   private readonly consoleErrors: ConsoleError[];
+  private readonly sensitiveSelectors = new Set<string>();
+  private readonly sensitiveValues = new Set<string>();
 
   private constructor(
     private readonly browser: Browser,
@@ -112,18 +114,33 @@ export class BrowserSession {
   }
 
   async screenshot(options: ScreenshotOptions = {}): Promise<Uint8Array | string> {
+    const mask = this.screenshotMasks();
     if (options.path) {
       await mkdir(dirname(options.path), { recursive: true });
       await this.page.screenshot({
         path: options.path,
-        fullPage: options.fullPage ?? true
+        fullPage: options.fullPage ?? true,
+        mask,
+        maskColor: "#1c2733"
       });
       return options.path;
     }
 
     return await this.page.screenshot({
-      fullPage: options.fullPage ?? true
+      fullPage: options.fullPage ?? true,
+      mask,
+      maskColor: "#1c2733"
     });
+  }
+
+  registerSensitiveSelector(selector: string): void {
+    this.sensitiveSelectors.add(selector);
+  }
+
+  registerSensitiveValue(value: string): void {
+    if (value.length > 0) {
+      this.sensitiveValues.add(value);
+    }
   }
 
   getCurrentUrl(): string {
@@ -161,8 +178,19 @@ export class BrowserSession {
   }
 
   async close(): Promise<void> {
+    this.sensitiveSelectors.clear();
+    this.sensitiveValues.clear();
     await this.context.close();
     await this.browser.close();
+  }
+
+  private screenshotMasks() {
+    return [
+      ...[...this.sensitiveSelectors].map((selector) => this.page.locator(selector)),
+      ...[...this.sensitiveValues].map((value) =>
+        this.page.getByText(value, { exact: false })
+      )
+    ];
   }
 
   private async collectElements(): Promise<ElementInformation[]> {

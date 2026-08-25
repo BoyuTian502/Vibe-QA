@@ -11,6 +11,7 @@ import {
   validateCreateTestRequest,
   type CreateTestRequestInput,
   type QATestMode,
+  type StoredTestConfiguration,
   type TestArtifactStore
 } from "../src/test-workflow.js";
 
@@ -111,7 +112,13 @@ describe("UserTestWorkflow", () => {
     });
     expect(JSON.stringify(artifacts.saved)).not.toContain("private-value");
     expect(JSON.stringify(artifacts.saved)).not.toContain("unsafe/model-path");
-    expect(artifacts.savedConfiguration).toEqual(testInput("functional"));
+    expect(artifacts.savedConfiguration).toEqual({
+      websiteUrl: "http://example.test/login",
+      objective: "Test login functionality",
+      expectedBehavior: "The user reaches the dashboard",
+      mode: "functional",
+      authenticationUsed: false
+    });
   });
 
   it("runs exploratory configuration through the existing ExplorationSession", async () => {
@@ -210,7 +217,8 @@ describe("UserTestWorkflow", () => {
           websiteUrl: "https://example.com/login",
           objective: "Test login",
           expectedBehavior: "The login page remains available",
-          mode: "functional"
+          mode: "functional",
+          credentials: null
         },
         "request-cross-origin"
       )
@@ -230,7 +238,8 @@ describe("UserTestWorkflow", () => {
         websiteUrl: "https://user:pass@example.com",
         objective: "Test login",
         expectedBehavior: "The login page loads",
-        mode: "functional"
+        mode: "functional",
+        credentials: null
       })
     ).toThrow(/embedded credentials/);
     expect(() =>
@@ -238,7 +247,8 @@ describe("UserTestWorkflow", () => {
         websiteUrl: "https://example.com",
         objective: "Test login with password=hunter2",
         expectedBehavior: "The login page loads",
-        mode: "functional"
+        mode: "functional",
+        credentials: null
       })
     ).toThrow(/Do not include/);
     expect(() =>
@@ -246,7 +256,8 @@ describe("UserTestWorkflow", () => {
         websiteUrl: "https://example.com",
         objective: " ",
         expectedBehavior: "The page loads",
-        mode: "functional"
+        mode: "functional",
+        credentials: null
       })
     ).toThrow(/objective is required/);
     expect(() =>
@@ -260,7 +271,7 @@ describe("UserTestWorkflow", () => {
 
 class MemoryArtifactStore implements TestArtifactStore {
   saved: TestResult | null = null;
-  savedConfiguration: CreateTestRequestInput | null = null;
+  savedConfiguration: StoredTestConfiguration | null = null;
 
   screenshotDirectory(runId: string): string {
     return `memory/${runId}/screenshots`;
@@ -269,7 +280,7 @@ class MemoryArtifactStore implements TestArtifactStore {
   async save(
     _runId: string,
     result: TestResult,
-    configuration: CreateTestRequestInput
+    configuration: StoredTestConfiguration
   ): Promise<void> {
     this.saved = result;
     this.savedConfiguration = configuration;
@@ -281,7 +292,8 @@ function testInput(mode: QATestMode): CreateTestRequestInput {
     websiteUrl: "http://example.test/login",
     objective: "Test login functionality",
     expectedBehavior: "The user reaches the dashboard",
-    mode
+    mode,
+    credentials: null
   };
 }
 

@@ -18,6 +18,7 @@ import {
   type QATestMode,
   type UserTestWorkflow
 } from "./test-workflow.js";
+import { TemporaryLoginCredentials } from "./secure-credentials.js";
 import {
   renderDashboardPage,
   renderHistoryPage,
@@ -95,7 +96,8 @@ async function handleRequest(
         websiteUrl: "",
         objective: "",
         expectedBehavior: "",
-        mode: "functional" as const
+        mode: "functional" as const,
+        credentials: null
       };
       try {
         form = await readTestRequestForm(request);
@@ -352,6 +354,7 @@ async function readTestRequestForm(request: IncomingMessage): Promise<{
   objective: string;
   expectedBehavior: string;
   mode: "functional" | "exploratory" | "regression";
+  credentials: TemporaryLoginCredentials | null;
 }> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -365,10 +368,26 @@ async function readTestRequestForm(request: IncomingMessage): Promise<{
   }
   const form = new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
   const mode = form.get("mode") ?? "";
+  const loginRequired = form.get("loginRequired") === "on";
+  const username = form.get("loginUsername") ?? "";
+  const password = form.get("loginPassword") ?? "";
+  let credentials: TemporaryLoginCredentials | null = null;
+  if (loginRequired) {
+    try {
+      credentials = new TemporaryLoginCredentials(username, password);
+    } catch (error) {
+      throw new TestRequestValidationError(
+        error instanceof Error
+          ? error.message
+          : "Temporary login credentials are invalid."
+      );
+    }
+  }
   return {
     websiteUrl: form.get("websiteUrl") ?? "",
     objective: form.get("objective") ?? "",
     expectedBehavior: form.get("expectedBehavior") ?? "",
-    mode: mode as QATestMode
+    mode: mode as QATestMode,
+    credentials
   };
 }

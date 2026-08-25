@@ -1,3 +1,5 @@
+import { createServer } from "node:http";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -82,6 +84,45 @@ describe("PlaywrightBrowserController", () => {
       }
     ]);
     expect(agent.getTrace().steps[0]?.result).toEqual({ success: true });
+  });
+
+  it("isolates cookies between browser controllers", async () => {
+    expect(controller).not.toBeNull();
+    const sessionServer = createServer((request, response) => {
+      if (request.url === "/set") {
+        response.setHeader("set-cookie", "secure_test_session=present; Path=/");
+        response.end("session created");
+        return;
+      }
+      response.end(
+        request.headers.cookie?.includes("secure_test_session=present")
+          ? "authenticated"
+          : "anonymous"
+      );
+    });
+    await new Promise<void>((resolve) => sessionServer.listen(0, "127.0.0.1", resolve));
+    const address = sessionServer.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Isolation test server did not expose an address.");
+    }
+    const url = `http://127.0.0.1:${address.port}`;
+    const secondController = await PlaywrightBrowserController.launch({
+      headless: true
+    });
+
+    try {
+      await controller.navigate(`${url}/set`);
+      await controller.navigate(`${url}/status`);
+      expect(await controller.getText("body")).toBe("authenticated");
+
+      await secondController.navigate(`${url}/status`);
+      expect(await secondController.getText("body")).toBe("anonymous");
+    } finally {
+      await secondController.close();
+      await new Promise<void>((resolve, reject) =>
+        sessionServer.close((error) => (error ? reject(error) : resolve()))
+      );
+    }
   });
 });
 

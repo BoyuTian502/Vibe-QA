@@ -41,7 +41,8 @@ export function renderTestCreationPage(
     websiteUrl: "",
     objective: "",
     expectedBehavior: "",
-    mode: "functional"
+    mode: "functional",
+    credentials: null
   }
 ): string {
   const selectedMode = availableModes.includes(values.mode)
@@ -122,12 +123,73 @@ export function renderTestCreationPage(
                 required
               >${escapeHtml(values.expectedBehavior)}</textarea>
             </label>
+            <section class="auth-configuration" aria-labelledby="authentication-heading">
+              <div class="auth-heading">
+                <div>
+                  <span class="field-label" id="authentication-heading">Authentication</span>
+                  <strong>Temporary login</strong>
+                </div>
+                <label class="auth-toggle">
+                  <input
+                    type="checkbox"
+                    name="loginRequired"
+                    ${values.credentials ? "checked" : ""}
+                  />
+                  <span>Login required</span>
+                </label>
+              </div>
+              <div class="auth-fields">
+                <label class="field-group" for="loginUsername">
+                  <span>Username or email</span>
+                  <input
+                    id="loginUsername"
+                    name="loginUsername"
+                    type="text"
+                    maxlength="512"
+                    autocomplete="off"
+                    spellcheck="false"
+                    ${values.credentials ? "required" : "disabled"}
+                  />
+                </label>
+                <label class="field-group" for="loginPassword">
+                  <span>Password</span>
+                  <input
+                    id="loginPassword"
+                    name="loginPassword"
+                    type="password"
+                    maxlength="512"
+                    autocomplete="off"
+                    ${values.credentials ? "required" : "disabled"}
+                  />
+                </label>
+              </div>
+              <p>Credentials stay in memory for this run and are never sent to the planner or saved with evidence.</p>
+            </section>
             <div class="form-actions">
               <span>Planning and browser execution use the existing safety policy.</span>
               <button type="submit" ${workflowAvailable ? "" : "disabled"}>Run test</button>
             </div>
           </form>
         </section>
+        <script>
+          (() => {
+            const toggle = document.querySelector('input[name="loginRequired"]');
+            const fields = [
+              document.querySelector('input[name="loginUsername"]'),
+              document.querySelector('input[name="loginPassword"]')
+            ];
+            const syncAuthentication = () => {
+              for (const field of fields) {
+                if (!(field instanceof HTMLInputElement) || !(toggle instanceof HTMLInputElement)) continue;
+                field.disabled = !toggle.checked;
+                field.required = toggle.checked;
+                if (!toggle.checked) field.value = "";
+              }
+            };
+            toggle?.addEventListener("change", syncAuthentication);
+            syncAuthentication();
+          })();
+        </script>
       </main>
     </div>
   `);
@@ -166,6 +228,7 @@ export function renderTestRequestPage(
 
           <section class="panel request-facts" aria-label="Test request details">
             ${renderRequestFact("Mode", testModeLabel(request.mode))}
+            ${renderRequestFact("Authentication", request.authenticationUsed ? "Temporary login" : "None")}
             ${renderRequestFact("Created", formatTimestamp(request.createdAt))}
             ${renderRequestFact("Completed", request.completedAt ? formatTimestamp(request.completedAt) : "Pending")}
             ${renderRequestFact("Test result", request.testStatus ? statusLabelFor(request.testStatus) : "Pending")}
@@ -1181,6 +1244,16 @@ function styles(): string {
     .field-group input, .field-group textarea { background: #fbfcfd; border: 1px solid #bcc7ce; color: #1c2733; outline: none; padding: 12px 13px; width: 100%; }
     .field-group textarea { line-height: 1.5; resize: vertical; }
     .field-group input:focus, .field-group textarea:focus { border-color: #245fbd; box-shadow: 0 0 0 3px #dce8fa; }
+    .auth-configuration { border-bottom: 1px solid #e4e9ec; border-top: 1px solid #e4e9ec; display: grid; gap: 16px; padding: 18px 0; }
+    .auth-heading { align-items: center; display: flex; gap: 18px; justify-content: space-between; }
+    .auth-heading > div { display: grid; gap: 4px; }
+    .auth-heading strong { font-size: 0.9rem; }
+    .field-label { color: #71808b; font-size: 0.68rem; font-weight: 800; text-transform: uppercase; }
+    .auth-toggle { align-items: center; cursor: pointer; display: flex; font-size: 0.76rem; font-weight: 800; gap: 8px; }
+    .auth-toggle input { accent-color: #245fbd; height: 16px; width: 16px; }
+    .auth-fields { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .auth-fields input:disabled { background: #f0f2f3; color: #87949d; cursor: not-allowed; }
+    .auth-configuration > p { color: #6d7b86; font-size: 0.76rem; line-height: 1.5; margin: 0; }
     .form-error { background: #fff1ef; border-left: 3px solid #d94b47; color: #922f2b; font-size: 0.82rem; padding: 12px 13px; }
     .form-actions { align-items: center; border-top: 1px solid #edf0f2; display: flex; gap: 18px; justify-content: space-between; padding-top: 18px; }
     .form-actions span { color: #71808b; font-size: 0.74rem; line-height: 1.45; }
@@ -1197,7 +1270,7 @@ function styles(): string {
     .request-completed { border-left: 4px solid #27876b; }
     .request-failed { border-left: 4px solid #d94b47; }
     .request-result-failed { border-left-color: #d94b47; }
-    .request-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 auto; max-width: 900px; }
+    .request-facts { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 0 auto; max-width: 900px; }
     .request-facts > div { border-right: 1px solid #edf0f2; display: grid; gap: 5px; padding: 18px; }
     .request-facts > div:last-child { border-right: 0; }
     .request-facts span { color: #71808b; font-size: 0.68rem; font-weight: 800; text-transform: uppercase; }
@@ -1244,8 +1317,9 @@ function styles(): string {
       .mobile-label { color: #89969f; display: block; font-size: 0.62rem; font-weight: 900; text-transform: uppercase; }
       .history-action { border-top: 1px solid #edf0f2; padding-top: 12px; }
       .request-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .request-facts > div:nth-child(2) { border-right: 0; }
-      .request-facts > div:nth-child(-n + 2) { border-bottom: 1px solid #edf0f2; }
+      .request-facts > div { border-bottom: 1px solid #edf0f2; }
+      .request-facts > div:nth-child(2n) { border-right: 0; }
+      .request-facts > div:last-child { border-bottom: 0; grid-column: 1 / -1; }
     }
     @media (max-width: 480px) {
       .sidebar { gap: 18px; }
@@ -1253,6 +1327,7 @@ function styles(): string {
       h1 { font-size: 1.55rem; }
       .status-band { grid-template-columns: 1fr; }
       .status-tag { grid-column: 1; }
+      .auth-fields { grid-template-columns: 1fr; }
       .form-actions { align-items: stretch; flex-direction: column; }
       .form-actions button { width: 100%; }
       .request-status-panel { grid-template-columns: 1fr; }

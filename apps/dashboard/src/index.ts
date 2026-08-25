@@ -15,6 +15,7 @@ export type {
   AgentTestRequestExecutorOptions,
   CreateTestRequestInput,
   QATestMode,
+  StoredTestConfiguration,
   TestArtifactStore,
   TestRequestExecutor,
   UserTestExecution,
@@ -22,6 +23,13 @@ export type {
   UserTestRequestStatus,
   UserTestWorkflowOptions
 } from "./test-workflow.js";
+export {
+  SecureAuthenticatedBrowserController,
+  TEMPORARY_PASSWORD_PLACEHOLDER,
+  TEMPORARY_USERNAME_PLACEHOLDER,
+  TemporaryLoginCredentials,
+  redactCredentialValues
+} from "./secure-credentials.js";
 export {
   AIBugAnalyzer,
   BugAnalysisService,

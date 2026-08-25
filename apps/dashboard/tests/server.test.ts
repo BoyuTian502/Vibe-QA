@@ -151,6 +151,9 @@ describe("dashboard server", () => {
       expect(formHtml).toContain('name="objective"');
       expect(formHtml).toContain('name="expectedBehavior"');
       expect(formHtml).toContain('name="mode"');
+      expect(formHtml).toContain('name="loginRequired"');
+      expect(formHtml).toContain('name="loginUsername"');
+      expect(formHtml).toContain('name="loginPassword"');
       expect(formHtml).toContain("All test modes ready");
 
       const invalid = await fetch(`${dashboard.url}/tests`, {
@@ -160,12 +163,18 @@ describe("dashboard server", () => {
           websiteUrl: "bad-url",
           objective: "Test login functionality",
           expectedBehavior: "The user reaches the dashboard",
-          mode: "functional"
+          mode: "functional",
+          loginRequired: "on",
+          loginUsername: "never-render-this-user",
+          loginPassword: "never-render-this-password"
         }),
         redirect: "manual"
       });
       expect(invalid.status).toBe(400);
-      expect(await invalid.text()).toContain("Website URL must be a valid URL");
+      const invalidHtml = await invalid.text();
+      expect(invalidHtml).toContain("Website URL must be a valid URL");
+      expect(invalidHtml).not.toContain("never-render-this-user");
+      expect(invalidHtml).not.toContain("never-render-this-password");
 
       const created = await fetch(`${dashboard.url}/tests`, {
         method: "POST",
@@ -174,7 +183,10 @@ describe("dashboard server", () => {
           websiteUrl: "http://example.test/login",
           objective: "Test login functionality",
           expectedBehavior: "The user reaches the dashboard",
-          mode: "functional"
+          mode: "functional",
+          loginRequired: "on",
+          loginUsername: "temporary-user",
+          loginPassword: "temporary-password"
         }),
         redirect: "manual"
       });
@@ -193,13 +205,17 @@ describe("dashboard server", () => {
       const apiResponse = await fetch(
         `${dashboard.url}/api/test-requests/request-web-001`
       );
-      await expect(apiResponse.json()).resolves.toMatchObject({
+      const apiBody = await apiResponse.text();
+      expect(JSON.parse(apiBody)).toMatchObject({
         status: "completed",
         runId: "demo-run-001",
         testStatus: "failed",
         mode: "functional",
-        expectedBehavior: "The user reaches the dashboard"
+        expectedBehavior: "The user reaches the dashboard",
+        authenticationUsed: true
       });
+      expect(apiBody).not.toContain("temporary-user");
+      expect(apiBody).not.toContain("temporary-password");
     } finally {
       await dashboard.close();
     }
