@@ -6,16 +6,31 @@ import type {
   DashboardTimelineEvent
 } from "./types.js";
 
+export type DashboardSection = "dashboard" | "history" | "details";
+
 export function renderDashboardPage(
   runs: DashboardRun[],
-  selectedRun: DashboardRun | null
+  selectedRun: DashboardRun | null,
+  activeSection: DashboardSection = "dashboard"
 ): string {
   return renderDocument(
-    selectedRun ? renderReport(runs, selectedRun) : renderEmptyState(runs)
+    selectedRun
+      ? renderReport(runs, selectedRun, activeSection)
+      : renderEmptyState(runs, activeSection)
   );
 }
 
-function renderReport(runs: DashboardRun[], run: DashboardRun): string {
+export function renderHistoryPage(runs: DashboardRun[]): string {
+  return renderDocument(
+    runs.length > 0 ? renderHistory(runs) : renderEmptyState(runs, "history")
+  );
+}
+
+function renderReport(
+  runs: DashboardRun[],
+  run: DashboardRun,
+  activeSection: DashboardSection
+): string {
   const statusLabel =
     run.status === "failed" ? "Issue found" : statusLabelFor(run.status);
   const statusSummary =
@@ -26,7 +41,7 @@ function renderReport(runs: DashboardRun[], run: DashboardRun): string {
 
   return `
     <div class="app-frame">
-      ${renderSidebar(runs, run.id)}
+      ${renderSidebar(runs, run.id, activeSection, true)}
       <main class="main-content">
         <header class="report-header">
           <div>
@@ -53,8 +68,8 @@ function renderReport(runs: DashboardRun[], run: DashboardRun): string {
         <section class="metrics" aria-label="Run summary">
           ${renderMetric("Steps passed", `${run.passedStepCount}/${run.stepCount}`)}
           ${renderMetric("Findings", String(run.issueCount))}
-          ${renderMetric("Trace events", String(run.timeline.length))}
           ${renderMetric("Screenshots", String(run.screenshotCount))}
+          ${renderMetric("Duration", formatDuration(run.durationMs))}
         </section>
 
         <div class="report-grid">
@@ -111,7 +126,12 @@ function renderReport(runs: DashboardRun[], run: DashboardRun): string {
   `;
 }
 
-function renderSidebar(runs: DashboardRun[], selectedRunId: string | null): string {
+function renderSidebar(
+  runs: DashboardRun[],
+  selectedRunId: string | null,
+  activeSection: DashboardSection,
+  showReportSections: boolean
+): string {
   const options = runs
     .map(
       (run) => `
@@ -129,7 +149,18 @@ function renderSidebar(runs: DashboardRun[], selectedRunId: string | null): stri
         <span><strong>Vibe-QA</strong><small>Report dashboard</small></span>
       </a>
 
-      <form class="run-picker" method="get" action="/">
+      <nav class="product-nav" aria-label="Primary navigation">
+        ${renderProductNavLink("Dashboard", "/", "dashboard", activeSection)}
+        ${renderProductNavLink("History", "/history", "history", activeSection)}
+        ${renderProductNavLink(
+          "Run Details",
+          selectedRunId ? `/runs/${encodeURIComponent(selectedRunId)}` : "/",
+          "details",
+          activeSection
+        )}
+      </nav>
+
+      <form class="run-picker" method="get" action="/runs">
         <label for="run">Saved run</label>
         <div class="picker-row">
           <select id="run" name="run">${options}</select>
@@ -137,13 +168,18 @@ function renderSidebar(runs: DashboardRun[], selectedRunId: string | null): stri
         </div>
       </form>
 
-      <nav class="section-nav" aria-label="Report sections">
-        <a href="#overview"><span>01</span>Overview</a>
-        <a href="#steps"><span>02</span>Test steps</a>
-        <a href="#issue"><span>03</span>Detected issue</a>
-        <a href="#timeline"><span>04</span>Timeline</a>
-        <a href="#evidence"><span>05</span>Evidence</a>
-      </nav>
+      ${
+        showReportSections
+          ? `<nav class="section-nav" aria-label="Run detail sections">
+              <span class="nav-label">Run details</span>
+              <a href="#overview"><span>01</span>Overview</a>
+              <a href="#steps"><span>02</span>Test steps</a>
+              <a href="#issue"><span>03</span>Detected issue</a>
+              <a href="#timeline"><span>04</span>Timeline</a>
+              <a href="#evidence"><span>05</span>Evidence</a>
+            </nav>`
+          : ""
+      }
 
       <div class="sidebar-note">
         <span class="live-dot" aria-hidden="true"></span>
@@ -153,10 +189,117 @@ function renderSidebar(runs: DashboardRun[], selectedRunId: string | null): stri
   `;
 }
 
-function renderEmptyState(runs: DashboardRun[]): string {
+function renderHistory(runs: DashboardRun[]): string {
+  const passedRuns = runs.filter((run) => run.status === "passed").length;
+  const totalBugs = runs.reduce((total, run) => total + run.issueCount, 0);
+  const totalScreenshots = runs.reduce((total, run) => total + run.screenshotCount, 0);
+  const passRate = runs.length > 0 ? Math.round((passedRuns / runs.length) * 100) : 0;
+
   return `
     <div class="app-frame">
-      ${renderSidebar(runs, null)}
+      ${renderSidebar(runs, runs[0]?.id ?? null, "history", false)}
+      <main class="main-content">
+        <header class="report-header history-header">
+          <div>
+            <p class="kicker">Test archive</p>
+            <h1>QA run history</h1>
+            <p class="header-summary">Every local demo report, automatically indexed newest first.</p>
+          </div>
+          <div class="run-identity">
+            <span>Indexed runs</span>
+            <strong>${runs.length}</strong>
+            <time>Newest first</time>
+          </div>
+        </header>
+
+        <section class="metrics history-metrics" aria-label="History summary">
+          ${renderMetric("Total runs", String(runs.length))}
+          ${renderMetric("Pass rate", `${passRate}%`)}
+          ${renderMetric("Bugs found", String(totalBugs))}
+          ${renderMetric("Screenshots", String(totalScreenshots))}
+        </section>
+
+        <section class="panel history-panel">
+          <div class="section-heading">
+            <div>
+              <p class="section-label">Saved test runs</p>
+              <h2>Execution history</h2>
+            </div>
+            <span class="count-label">${runs.length} total</span>
+          </div>
+          <div class="history-table" role="table" aria-label="QA run history">
+            <div class="history-row history-table-head" role="row">
+              <span role="columnheader">Run</span>
+              <span role="columnheader">Run time</span>
+              <span role="columnheader">Status</span>
+              <span role="columnheader">Bugs found</span>
+              <span role="columnheader">Screenshots</span>
+              <span role="columnheader">Duration</span>
+              <span role="columnheader">Details</span>
+            </div>
+            ${runs.map(renderHistoryRow).join("")}
+          </div>
+        </section>
+
+        <footer class="page-footer">
+          <span>Vibe-QA local report dashboard</span>
+          <span>${runs.length} run${runs.length === 1 ? "" : "s"} discovered automatically</span>
+        </footer>
+      </main>
+    </div>
+  `;
+}
+
+function renderHistoryRow(run: DashboardRun): string {
+  const statusLabel =
+    run.status === "failed" ? "Issue found" : statusLabelFor(run.status);
+  return `
+    <article class="history-row" role="row">
+      <div class="history-run" role="cell">
+        <strong>${escapeHtml(run.goal)}</strong>
+        <code>${escapeHtml(run.id)}</code>
+      </div>
+      ${renderHistoryCell("Run time", `<time>${escapeHtml(formatTimestamp(run.startedAt))}</time>`)}
+      ${renderHistoryCell(
+        "Status",
+        `<span class="status-tag status-tag-${escapeHtml(run.status)}">${escapeHtml(statusLabel)}</span>`
+      )}
+      ${renderHistoryCell("Bugs found", `<strong>${run.issueCount}</strong>`)}
+      ${renderHistoryCell("Screenshots", `<strong>${run.screenshotCount}</strong>`)}
+      ${renderHistoryCell("Duration", `<strong>${escapeHtml(formatDuration(run.durationMs))}</strong>`)}
+      <div class="history-action" role="cell">
+        <a href="/runs/${encodeURIComponent(run.id)}">View details</a>
+      </div>
+    </article>
+  `;
+}
+
+function renderHistoryCell(label: string, content: string): string {
+  return `
+    <div class="history-cell" role="cell">
+      <span class="mobile-label">${escapeHtml(label)}</span>
+      ${content}
+    </div>
+  `;
+}
+
+function renderProductNavLink(
+  label: string,
+  href: string,
+  section: DashboardSection,
+  activeSection: DashboardSection
+): string {
+  const active = section === activeSection;
+  return `<a href="${escapeAttribute(href)}" class="${active ? "active" : ""}" ${active ? 'aria-current="page"' : ""}>${escapeHtml(label)}</a>`;
+}
+
+function renderEmptyState(
+  runs: DashboardRun[],
+  activeSection: DashboardSection
+): string {
+  return `
+    <div class="app-frame">
+      ${renderSidebar(runs, null, activeSection, false)}
       <main class="main-content empty-shell">
         <section class="empty-state">
           <span class="empty-mark">VQ</span>
@@ -367,6 +510,21 @@ function formatTime(value: string | null): string {
   }).format(date);
 }
 
+function formatDuration(value: number | null): string {
+  if (value === null) {
+    return "Unavailable";
+  }
+  if (value < 1000) {
+    return `${value} ms`;
+  }
+  if (value < 60_000) {
+    return `${(value / 1000).toFixed(1)} s`;
+  }
+  const minutes = Math.floor(value / 60_000);
+  const seconds = Math.round((value % 60_000) / 1000);
+  return `${minutes}m ${seconds}s`;
+}
+
 function renderDocument(body: string): string {
   return `<!doctype html>
 <html lang="en">
@@ -405,6 +563,7 @@ function styles(): string {
       gap: 30px;
       height: 100vh;
       left: 0;
+      overflow-y: auto;
       padding: 26px 22px;
       position: fixed;
       top: 0;
@@ -451,7 +610,19 @@ function styles(): string {
       font-weight: 800;
       padding: 9px 12px;
     }
+    .product-nav { border-bottom: 1px solid #2f404c; display: grid; padding-bottom: 18px; }
+    .product-nav a {
+      border-left: 3px solid transparent;
+      color: #c8d2d9;
+      font-size: 0.86rem;
+      font-weight: 700;
+      padding: 10px 12px;
+      text-decoration: none;
+    }
+    .product-nav a:hover { background: #202f3a; color: white; }
+    .product-nav a.active { background: #202f3a; border-left-color: #f0c24b; color: white; }
     .section-nav { display: grid; gap: 4px; }
+    .nav-label { color: #718491; font-size: 0.65rem; font-weight: 900; padding: 0 12px 6px; text-transform: uppercase; }
     .section-nav a {
       align-items: center;
       border-left: 2px solid transparent;
@@ -493,6 +664,8 @@ function styles(): string {
     }
     .run-identity code { font-size: 0.78rem; }
     .run-identity time { color: #6d7b86; font-size: 0.78rem; }
+    .run-identity strong { font-size: 1.55rem; }
+    .header-summary { color: #6d7b86; font-size: 0.88rem; margin: 10px 0 0; }
     .status-band {
       align-items: center;
       border: 1px solid #d6dde2;
@@ -644,6 +817,27 @@ function styles(): string {
     .screenshot-item figcaption span { font-size: 0.76rem; font-weight: 800; }
     .screenshot-item figcaption code { color: #71808b; font-size: 0.66rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .empty-copy { color: #6d7b86; font-size: 0.86rem; padding: 20px; }
+    .history-panel { margin: 0 auto; max-width: 1320px; }
+    .history-table { min-width: 0; }
+    .history-row {
+      align-items: center;
+      border-bottom: 1px solid #edf0f2;
+      display: grid;
+      gap: 18px;
+      grid-template-columns: minmax(240px, 2fr) minmax(140px, 0.9fr) 105px 82px 88px 82px 90px;
+      padding: 15px 20px;
+    }
+    .history-row:last-child { border-bottom: 0; }
+    .history-table-head { background: #f8fafb; color: #6d7b86; font-size: 0.68rem; font-weight: 900; padding-bottom: 10px; padding-top: 10px; text-transform: uppercase; }
+    .history-run { min-width: 0; }
+    .history-run strong, .history-run code { display: block; }
+    .history-run strong { font-size: 0.84rem; line-height: 1.4; }
+    .history-run code { color: #84919a; font-size: 0.65rem; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .history-cell { color: #52616d; font-size: 0.76rem; min-width: 0; }
+    .history-cell strong { color: #1c2733; font-size: 0.86rem; }
+    .history-cell .status-tag { display: inline-block; font-size: 0.62rem; padding: 5px 6px; }
+    .history-action a { color: #245fbd; font-size: 0.76rem; font-weight: 800; }
+    .mobile-label { display: none; }
     .page-footer { border-top: 1px solid #d6dde2; color: #7a8790; display: flex; font-size: 0.7rem; justify-content: space-between; margin: 34px auto 0; max-width: 1320px; padding-top: 18px; }
     .empty-shell { align-items: center; display: grid; min-height: 100vh; }
     .empty-state { margin: 0 auto; max-width: 520px; text-align: center; }
@@ -654,10 +848,15 @@ function styles(): string {
     @media (max-width: 1040px) {
       .report-grid { grid-template-columns: 1fr; }
       .issue-panel { grid-row: 1; }
+      .history-row { grid-template-columns: minmax(220px, 1.5fr) minmax(130px, 1fr) 100px 70px 80px 80px; }
+      .history-row > :nth-child(5) { display: none; }
     }
     @media (max-width: 780px) {
       .sidebar { height: auto; padding: 18px; position: static; width: 100%; }
       .section-nav { display: none; }
+      .product-nav { grid-template-columns: repeat(3, minmax(0, 1fr)); padding-bottom: 12px; }
+      .product-nav a { border-bottom: 3px solid transparent; border-left: 0; padding: 9px 7px; text-align: center; }
+      .product-nav a.active { border-bottom-color: #f0c24b; border-left: 0; }
       .sidebar-note { margin-top: 0; }
       .main-content { margin-left: 0; padding: 24px 16px; }
       .report-header { align-items: start; display: grid; }
@@ -668,6 +867,18 @@ function styles(): string {
       .metric:nth-child(2) { border-right: 0; }
       .metric:nth-child(-n + 2) { border-bottom: 1px solid #d6dde2; }
       .screenshot-grid { grid-template-columns: 1fr; }
+      .history-table-head { display: none; }
+      .history-row {
+        align-items: start;
+        gap: 16px 12px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        padding: 18px;
+      }
+      .history-row > :nth-child(5) { display: block; }
+      .history-run, .history-action { grid-column: 1 / -1; }
+      .history-cell { display: grid; gap: 4px; }
+      .mobile-label { color: #89969f; display: block; font-size: 0.62rem; font-weight: 900; text-transform: uppercase; }
+      .history-action { border-top: 1px solid #edf0f2; padding-top: 12px; }
     }
     @media (max-width: 480px) {
       .sidebar { gap: 18px; }

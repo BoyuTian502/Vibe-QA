@@ -125,6 +125,11 @@ Open the printed URL to review test status, detected issues, executed steps, the
 agent timeline, and captured browser screenshots. The dashboard reads existing
 artifacts from `run-output/demo/` and never modifies a test run.
 
+Use **Dashboard** for the latest run, **History** for every automatically
+discovered run, and **Run Details** for a stable report URL with its timeline and
+evidence. History includes run time, status, bugs found, screenshot count, and
+duration derived from the trace.
+
 ## Development
 
 Requirements: Node.js 18 or later and a supported Chrome or Chromium browser.

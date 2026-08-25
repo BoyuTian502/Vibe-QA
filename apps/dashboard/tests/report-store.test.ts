@@ -11,10 +11,12 @@ describe("ReportStore", () => {
     const store = new ReportStore(fixtureRoot);
     const runs = await store.listRuns();
 
-    expect(runs).toHaveLength(1);
-    expect(runs[0]).toMatchObject({
+    expect(runs).toHaveLength(2);
+    expect(runs.map((run) => run.id)).toEqual(["demo-run-002", "demo-run-001"]);
+    expect(runs[1]).toMatchObject({
       id: "demo-run-001",
       status: "failed",
+      durationMs: 3000,
       stepCount: 2,
       passedStepCount: 1,
       issueCount: 1,
@@ -33,6 +35,16 @@ describe("ReportStore", () => {
       status: "failed",
       safetyDecision: "allow",
       error: expect.stringContaining("BUG-BENCH-005")
+    });
+
+    const passingRun = await store.loadRun("demo-run-002");
+    expect(passingRun).toMatchObject({
+      status: "passed",
+      startedAt: "2026-08-21T09:00:00.000Z",
+      completedAt: "2026-08-21T09:00:05.250Z",
+      durationMs: 5250,
+      issueCount: 0,
+      screenshotCount: 0
     });
   });
 

@@ -5,6 +5,8 @@ export interface DashboardRunSummary {
   goal: string;
   status: DashboardRunStatus;
   startedAt: string | null;
+  completedAt: string | null;
+  durationMs: number | null;
   stepCount: number;
   passedStepCount: number;
   issueCount: number;

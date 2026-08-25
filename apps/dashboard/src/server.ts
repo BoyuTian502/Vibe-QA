@@ -4,7 +4,7 @@ import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ReportStore } from "./report-store.js";
-import { renderDashboardPage } from "./view.js";
+import { renderDashboardPage, renderHistoryPage } from "./view.js";
 
 export interface DashboardServerOptions {
   host?: string;
@@ -91,6 +91,38 @@ async function handleRequest(
       return;
     }
 
+    if (requestUrl.pathname === "/history") {
+      sendHtml(response, renderHistoryPage(await store.listRuns()));
+      return;
+    }
+
+    if (requestUrl.pathname === "/runs") {
+      const runs = await store.listRuns();
+      const selectedId = requestUrl.searchParams.get("run");
+      const selectedRun =
+        (selectedId ? runs.find((run) => run.id === selectedId) : null) ??
+        runs[0] ??
+        null;
+      sendRedirect(
+        response,
+        selectedRun ? `/runs/${encodeURIComponent(selectedRun.id)}` : "/"
+      );
+      return;
+    }
+
+    const detailMatch = /^\/runs\/([^/]+)$/.exec(requestUrl.pathname);
+    if (detailMatch?.[1]) {
+      const runId = decodeURIComponent(detailMatch[1]);
+      const runs = await store.listRuns();
+      const selectedRun = runs.find((run) => run.id === runId) ?? null;
+      if (!selectedRun) {
+        sendText(response, "Run not found", 404);
+        return;
+      }
+      sendHtml(response, renderDashboardPage(runs, selectedRun, "details"));
+      return;
+    }
+
     if (requestUrl.pathname === "/") {
       const runs = await store.listRuns();
       const selectedId = requestUrl.searchParams.get("run") ?? runs[0]?.id ?? null;
@@ -98,7 +130,14 @@ async function handleRequest(
         (selectedId ? runs.find((run) => run.id === selectedId) : null) ??
         runs[0] ??
         null;
-      sendHtml(response, renderDashboardPage(runs, selectedRun));
+      sendHtml(
+        response,
+        renderDashboardPage(
+          runs,
+          selectedRun,
+          requestUrl.searchParams.has("run") ? "details" : "dashboard"
+        )
+      );
       return;
     }
 
@@ -140,6 +179,15 @@ function sendText(response: ServerResponse, body: string, statusCode: number): v
     "x-content-type-options": "nosniff"
   });
   response.end(body);
+}
+
+function sendRedirect(response: ServerResponse, location: string): void {
+  response.writeHead(302, {
+    location,
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff"
+  });
+  response.end();
 }
 
 function sendArtifact(response: ServerResponse, path: string, body: Buffer): void {

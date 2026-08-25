@@ -77,6 +77,8 @@ export class ReportStore {
     const traceSteps = asArray(traceRecord.steps).map(asRecord);
     const steps = rawSteps.map(parseStep);
     const status = parseStatus(reportRecord.status);
+    const startedAt = nullableString(traceSteps[0]?.timestamp);
+    const completedAt = nullableString(traceSteps.at(-1)?.timestamp);
     const primaryBug =
       rawBugs.find((bug) => stringValue(bug.category) === "console") ??
       rawBugs[0] ??
@@ -86,7 +88,9 @@ export class ReportStore {
       id: runId,
       goal: stringValue(reportRecord.goal, "Untitled QA run"),
       status,
-      startedAt: nullableString(traceSteps[0]?.timestamp),
+      startedAt,
+      completedAt,
+      durationMs: durationBetween(startedAt, completedAt),
       stepCount: steps.length,
       passedStepCount: steps.filter((step) => step.status === "passed").length,
       issueCount: rawBugs.length,
@@ -327,6 +331,20 @@ function numberValue(value: unknown, fallback: number): number {
 
 function booleanValue(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+function durationBetween(
+  startedAt: string | null,
+  completedAt: string | null
+): number | null {
+  if (!startedAt || !completedAt) {
+    return null;
+  }
+  const start = new Date(startedAt).valueOf();
+  const end = new Date(completedAt).valueOf();
+  return Number.isFinite(start) && Number.isFinite(end) && end >= start
+    ? end - start
+    : null;
 }
 
 async function readJson(path: string): Promise<unknown> {

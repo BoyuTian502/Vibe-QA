@@ -19,21 +19,46 @@ describe("dashboard server", () => {
       expect(page.status).toBe(200);
       const html = await page.text();
       expect(html).toContain("Vibe-QA Report Dashboard");
-      expect(html).toContain("Detect the fragile dashboard widget failure");
-      expect(html).toContain("Detected issue");
+      expect(html).toContain("Verify the benchmark login workflow");
+      expect(html).toContain("Dashboard");
+      expect(html).toContain("History");
+      expect(html).toContain("Run Details");
       expect(html).toContain("Execution timeline");
       expect(html).toContain("Evidence screenshots");
 
       const fallbackPage = await fetch(`${dashboard.url}/?run=missing-run`);
       expect(await fallbackPage.text()).toContain(
-        "Detect the fragile dashboard widget failure"
+        "Verify the benchmark login workflow"
       );
+
+      const historyPage = await fetch(`${dashboard.url}/history`);
+      const historyHtml = await historyPage.text();
+      expect(historyPage.status).toBe(200);
+      expect(historyHtml).toContain("QA run history");
+      expect(historyHtml).toContain("Run time");
+      expect(historyHtml).toContain("Status");
+      expect(historyHtml).toContain("Bugs found");
+      expect(historyHtml).toContain("Screenshots");
+      expect(historyHtml).toContain("Duration");
+      expect(historyHtml).toContain("5.3 s");
+      expect(historyHtml).toContain("3.0 s");
+
+      const detailPage = await fetch(`${dashboard.url}/runs/demo-run-001`);
+      const detailHtml = await detailPage.text();
+      expect(detailPage.status).toBe(200);
+      expect(detailHtml).toContain("Detect the fragile dashboard widget failure");
+      expect(detailHtml).toContain("Detected issue");
+      expect(detailHtml).toContain('aria-current="page">Run Details</a>');
+
+      const selectedRun = await fetch(`${dashboard.url}/runs?run=demo-run-001`);
+      expect(selectedRun.url).toBe(`${dashboard.url}/runs/demo-run-001`);
 
       const apiResponse = await fetch(`${dashboard.url}/api/runs/demo-run-001`);
       expect(apiResponse.status).toBe(200);
       await expect(apiResponse.json()).resolves.toMatchObject({
         id: "demo-run-001",
         status: "failed",
+        durationMs: 3000,
         screenshotCount: 1
       });
 
