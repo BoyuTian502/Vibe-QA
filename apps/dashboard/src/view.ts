@@ -6,7 +6,11 @@ import type {
   DashboardTimelineEvent
 } from "./types.js";
 import type { BugAnalysis } from "./bug-analysis.js";
-import type { CreateTestRequestInput, UserTestRequest } from "./test-workflow.js";
+import type {
+  CreateTestRequestInput,
+  QATestMode,
+  UserTestRequest
+} from "./test-workflow.js";
 
 export type DashboardSection = "dashboard" | "history" | "details" | "new-test";
 
@@ -31,10 +35,25 @@ export function renderHistoryPage(runs: DashboardRun[]): string {
 
 export function renderTestCreationPage(
   runs: DashboardRun[],
-  plannerAvailable: boolean,
+  availableModes: readonly QATestMode[],
   error: string | null = null,
-  values: CreateTestRequestInput = { websiteUrl: "", objective: "" }
+  values: CreateTestRequestInput = {
+    websiteUrl: "",
+    objective: "",
+    expectedBehavior: "",
+    mode: "functional"
+  }
 ): string {
+  const selectedMode = availableModes.includes(values.mode)
+    ? values.mode
+    : (availableModes[0] ?? values.mode);
+  const workflowAvailable = availableModes.length > 0;
+  const availabilityLabel =
+    availableModes.length === 3
+      ? "All test modes ready"
+      : availableModes.includes("exploratory")
+        ? "Exploratory mode ready"
+        : "Test runner not configured";
   return renderDocument(`
     <div class="app-frame">
       ${renderSidebar(runs, runs[0]?.id ?? null, "new-test", false)}
@@ -45,8 +64,8 @@ export function renderTestCreationPage(
             <h1>Run a website test</h1>
             <p class="header-summary">Turn a testing objective into an evidence-backed browser run.</p>
           </div>
-          <span class="planner-status planner-${plannerAvailable ? "ready" : "offline"}">
-            ${plannerAvailable ? "AI planner ready" : "AI planner not configured"}
+          <span class="planner-status planner-${workflowAvailable ? "ready" : "offline"}">
+            ${availabilityLabel}
           </span>
         </header>
 
@@ -60,8 +79,16 @@ export function renderTestCreationPage(
           </div>
           <form class="test-request-form" method="post" action="/tests">
             ${error ? `<div class="form-error" role="alert">${escapeHtml(error)}</div>` : ""}
+            <fieldset class="mode-fieldset">
+              <legend>Testing mode</legend>
+              <div class="mode-control">
+                ${renderModeOption("functional", selectedMode, availableModes)}
+                ${renderModeOption("exploratory", selectedMode, availableModes)}
+                ${renderModeOption("regression", selectedMode, availableModes)}
+              </div>
+            </fieldset>
             <label class="field-group" for="websiteUrl">
-              <span>Website URL</span>
+              <span>Target page</span>
               <input
                 id="websiteUrl"
                 name="websiteUrl"
@@ -84,9 +111,20 @@ export function renderTestCreationPage(
                 required
               >${escapeHtml(values.objective)}</textarea>
             </label>
+            <label class="field-group" for="expectedBehavior">
+              <span>Expected behavior</span>
+              <textarea
+                id="expectedBehavior"
+                name="expectedBehavior"
+                maxlength="1500"
+                rows="4"
+                placeholder="The user reaches the dashboard without browser errors"
+                required
+              >${escapeHtml(values.expectedBehavior)}</textarea>
+            </label>
             <div class="form-actions">
               <span>Planning and browser execution use the existing safety policy.</span>
-              <button type="submit" ${plannerAvailable ? "" : "disabled"}>Run test</button>
+              <button type="submit" ${workflowAvailable ? "" : "disabled"}>Run test</button>
             </div>
           </form>
         </section>
@@ -109,7 +147,7 @@ export function renderTestRequestPage(
         <main class="main-content test-entry-shell">
           <header class="report-header test-entry-header">
             <div>
-              <p class="kicker">Test request</p>
+              <p class="kicker">${escapeHtml(testModeLabel(request.mode))} test request</p>
               <h1>${escapeHtml(request.objective)}</h1>
               <p class="header-summary">${escapeHtml(request.websiteUrl)}</p>
             </div>
@@ -127,10 +165,15 @@ export function renderTestRequestPage(
           </section>
 
           <section class="panel request-facts" aria-label="Test request details">
+            ${renderRequestFact("Mode", testModeLabel(request.mode))}
             ${renderRequestFact("Created", formatTimestamp(request.createdAt))}
-            ${renderRequestFact("Started", request.startedAt ? formatTimestamp(request.startedAt) : "Pending")}
             ${renderRequestFact("Completed", request.completedAt ? formatTimestamp(request.completedAt) : "Pending")}
             ${renderRequestFact("Test result", request.testStatus ? statusLabelFor(request.testStatus) : "Pending")}
+          </section>
+
+          <section class="panel expected-behavior-panel">
+            <span>Expected behavior</span>
+            <p>${escapeHtml(request.expectedBehavior)}</p>
           </section>
 
           <div class="request-actions">
@@ -461,6 +504,30 @@ function renderRequestFact(label: string, value: string): string {
       <strong>${escapeHtml(value)}</strong>
     </div>
   `;
+}
+
+function renderModeOption(
+  mode: QATestMode,
+  selectedMode: QATestMode,
+  availableModes: readonly QATestMode[]
+): string {
+  const available = availableModes.includes(mode);
+  return `
+    <label class="mode-option ${available ? "" : "mode-disabled"}">
+      <input
+        type="radio"
+        name="mode"
+        value="${mode}"
+        ${mode === selectedMode ? "checked" : ""}
+        ${available ? "" : "disabled"}
+      />
+      <span>${escapeHtml(testModeLabel(mode))}</span>
+    </label>
+  `;
+}
+
+function testModeLabel(mode: QATestMode): string {
+  return `${mode[0]?.toUpperCase() ?? ""}${mode.slice(1)}`;
 }
 
 function testRequestStatusTitle(request: UserTestRequest): string {
@@ -1098,6 +1165,17 @@ function styles(): string {
     .planner-offline { color: #9a6815; }
     .test-form-panel { margin: 0 auto; max-width: 900px; }
     .test-request-form { display: grid; gap: 22px; padding: 24px; }
+    .mode-fieldset { border: 0; margin: 0; min-width: 0; padding: 0; }
+    .mode-fieldset legend { color: #53636f; font-size: 0.76rem; font-weight: 800; margin-bottom: 8px; }
+    .mode-control { border: 1px solid #bcc7ce; border-radius: 6px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; }
+    .mode-option { cursor: pointer; min-width: 0; position: relative; }
+    .mode-option + .mode-option { border-left: 1px solid #bcc7ce; }
+    .mode-option input { height: 1px; opacity: 0; position: absolute; width: 1px; }
+    .mode-option span { color: #53636f; display: block; font-size: 0.76rem; font-weight: 800; overflow-wrap: anywhere; padding: 11px 8px; text-align: center; }
+    .mode-option input:checked + span { background: #1c2733; color: white; }
+    .mode-option input:focus-visible + span { box-shadow: inset 0 0 0 3px #8eb6ef; }
+    .mode-disabled { cursor: not-allowed; }
+    .mode-disabled span { background: #f0f2f3; color: #9aa5ac; }
     .field-group { display: grid; gap: 8px; }
     .field-group > span { color: #53636f; font-size: 0.76rem; font-weight: 800; }
     .field-group input, .field-group textarea { background: #fbfcfd; border: 1px solid #bcc7ce; color: #1c2733; outline: none; padding: 12px 13px; width: 100%; }
@@ -1124,6 +1202,9 @@ function styles(): string {
     .request-facts > div:last-child { border-right: 0; }
     .request-facts span { color: #71808b; font-size: 0.68rem; font-weight: 800; text-transform: uppercase; }
     .request-facts strong { font-size: 0.82rem; line-height: 1.4; }
+    .expected-behavior-panel { margin: 14px auto 0; max-width: 900px; padding: 18px; }
+    .expected-behavior-panel span { color: #71808b; font-size: 0.68rem; font-weight: 800; text-transform: uppercase; }
+    .expected-behavior-panel p { color: #52616d; font-size: 0.86rem; line-height: 1.55; margin: 7px 0 0; }
     .request-actions { display: flex; gap: 10px; justify-content: flex-end; margin: 18px auto 0; max-width: 900px; }
     .secondary-action { background: white; border: 1px solid #bcc7ce; color: #33434f; }
     @media (max-width: 1040px) {

@@ -115,7 +115,10 @@ describe("dashboard server", () => {
       const newTestPage = await fetch(`${dashboard.url}/tests/new`);
       const newTestHtml = await newTestPage.text();
       expect(newTestHtml).toContain("Run a website test");
-      expect(newTestHtml).toContain("AI planner not configured");
+      expect(newTestHtml).toContain("Exploratory mode ready");
+      expect(newTestHtml).toContain('value="functional"');
+      expect(newTestHtml).toContain('value="exploratory"');
+      expect(newTestHtml).toContain('value="regression"');
       expect(newTestHtml).toContain("disabled");
     } finally {
       await dashboard.close();
@@ -146,14 +149,18 @@ describe("dashboard server", () => {
       expect(formPage.status).toBe(200);
       expect(formHtml).toContain('name="websiteUrl"');
       expect(formHtml).toContain('name="objective"');
-      expect(formHtml).toContain("AI planner ready");
+      expect(formHtml).toContain('name="expectedBehavior"');
+      expect(formHtml).toContain('name="mode"');
+      expect(formHtml).toContain("All test modes ready");
 
       const invalid = await fetch(`${dashboard.url}/tests`, {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
           websiteUrl: "bad-url",
-          objective: "Test login functionality"
+          objective: "Test login functionality",
+          expectedBehavior: "The user reaches the dashboard",
+          mode: "functional"
         }),
         redirect: "manual"
       });
@@ -165,7 +172,9 @@ describe("dashboard server", () => {
         headers: { "content-type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
           websiteUrl: "http://example.test/login",
-          objective: "Test login functionality"
+          objective: "Test login functionality",
+          expectedBehavior: "The user reaches the dashboard",
+          mode: "functional"
         }),
         redirect: "manual"
       });
@@ -176,6 +185,8 @@ describe("dashboard server", () => {
       const statusPage = await fetch(`${dashboard.url}/test-requests/request-web-001`);
       const statusHtml = await statusPage.text();
       expect(statusHtml).toContain("Issue found");
+      expect(statusHtml).toContain("Functional test request");
+      expect(statusHtml).toContain("The user reaches the dashboard");
       expect(statusHtml).toContain("View test report");
       expect(statusHtml).toContain("/runs/demo-run-001");
 
@@ -185,7 +196,9 @@ describe("dashboard server", () => {
       await expect(apiResponse.json()).resolves.toMatchObject({
         status: "completed",
         runId: "demo-run-001",
-        testStatus: "failed"
+        testStatus: "failed",
+        mode: "functional",
+        expectedBehavior: "The user reaches the dashboard"
       });
     } finally {
       await dashboard.close();

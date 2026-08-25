@@ -4,11 +4,20 @@ import { join } from "node:path";
 
 import type { BrowserController } from "@vibeqa/agent-core";
 import { PlaywrightBrowserController } from "@vibeqa/browser-playwright";
+import {
+  ExplorationSession,
+  generateActionCandidates,
+  type ActionCandidate,
+  type ExplorationFinding,
+  type ExplorationResult
+} from "@vibeqa/explorer";
 import type { LLMClient } from "@vibeqa/llm";
 import { LLMTestPlanner, type TestPlanner } from "@vibeqa/planner";
-import type { BrowserAction } from "@vibeqa/schemas";
+import type { BrowserAction, Observation } from "@vibeqa/schemas";
 import {
   TestTask,
+  type BugReport,
+  type ExecutedTestStep,
   type TestCase,
   type TestResult,
   type TestStatus
@@ -17,7 +26,11 @@ import {
 export interface CreateTestRequestInput {
   websiteUrl: string;
   objective: string;
+  expectedBehavior: string;
+  mode: QATestMode;
 }
+
+export type QATestMode = "functional" | "exploratory" | "regression";
 
 export type UserTestRequestStatus = "queued" | "running" | "completed" | "failed";
 
@@ -25,6 +38,8 @@ export interface UserTestRequest {
   id: string;
   websiteUrl: string;
   objective: string;
+  expectedBehavior: string;
+  mode: QATestMode;
   status: UserTestRequestStatus;
   createdAt: string;
   startedAt: string | null;
@@ -46,10 +61,11 @@ export interface TestRequestExecutor {
 export interface UserTestWorkflowOptions {
   idFactory?: () => string;
   now?: () => Date;
+  availableModes?: readonly QATestMode[];
 }
 
 export interface AgentTestRequestExecutorOptions {
-  planner: TestPlanner;
+  planner: TestPlanner | null;
   outputRoot: string;
   launchBrowser?: () => Promise<ClosableBrowserController>;
   artifactStore?: TestArtifactStore;
@@ -58,7 +74,11 @@ export interface AgentTestRequestExecutorOptions {
 
 export interface TestArtifactStore {
   screenshotDirectory(runId: string): string;
-  save(runId: string, result: TestResult): Promise<void>;
+  save(
+    runId: string,
+    result: TestResult,
+    configuration: CreateTestRequestInput
+  ): Promise<void>;
 }
 
 interface ClosableBrowserController extends BrowserController {
@@ -66,13 +86,20 @@ interface ClosableBrowserController extends BrowserController {
 }
 
 const MAX_OBJECTIVE_LENGTH = 1_000;
+const MAX_EXPECTED_BEHAVIOR_LENGTH = 1_500;
 const MAX_URL_LENGTH = 2_048;
+const ALL_TEST_MODES: readonly QATestMode[] = [
+  "functional",
+  "exploratory",
+  "regression"
+];
 
 export class UserTestWorkflow {
   private readonly requests = new Map<string, UserTestRequest>();
   private readonly completions = new Map<string, Promise<UserTestRequest>>();
   private readonly idFactory: () => string;
   private readonly now: () => Date;
+  private readonly modes: readonly QATestMode[];
 
   constructor(
     private readonly executor: TestRequestExecutor | null,
@@ -80,22 +107,32 @@ export class UserTestWorkflow {
   ) {
     this.idFactory = options.idFactory ?? randomUUID;
     this.now = options.now ?? (() => new Date());
+    this.modes = this.executor ? (options.availableModes ?? ALL_TEST_MODES) : [];
   }
 
   get available(): boolean {
-    return this.executor !== null;
+    return this.modes.length > 0;
+  }
+
+  get availableModes(): readonly QATestMode[] {
+    return [...this.modes];
+  }
+
+  supports(mode: QATestMode): boolean {
+    return this.modes.includes(mode);
   }
 
   submit(input: CreateTestRequestInput): UserTestRequest {
-    if (!this.executor) {
-      throw new TestWorkflowUnavailableError();
-    }
-
     const validated = validateCreateTestRequest(input);
+    if (!this.executor || !this.supports(validated.mode)) {
+      throw new TestWorkflowUnavailableError(validated.mode);
+    }
     const request: UserTestRequest = {
       id: this.idFactory(),
       websiteUrl: validated.websiteUrl,
       objective: validated.objective,
+      expectedBehavior: validated.expectedBehavior,
+      mode: validated.mode,
       status: "queued",
       createdAt: this.now().toISOString(),
       startedAt: null,
@@ -135,7 +172,7 @@ export class UserTestWorkflow {
     try {
       const execution = await this.executor?.execute(input, request.id);
       if (!execution) {
-        throw new TestWorkflowUnavailableError();
+        throw new TestWorkflowUnavailableError(input.mode);
       }
       request.status = "completed";
       request.runId = execution.runId;
@@ -152,7 +189,7 @@ export class UserTestWorkflow {
 }
 
 export class AgentTestRequestExecutor implements TestRequestExecutor {
-  private readonly planner: TestPlanner;
+  private readonly planner: TestPlanner | null;
   private readonly launchBrowser: () => Promise<ClosableBrowserController>;
   private readonly artifactStore: TestArtifactStore;
   private readonly now: () => Date;
@@ -171,25 +208,139 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
     input: CreateTestRequestInput,
     requestId: string
   ): Promise<UserTestExecution> {
-    const testCase = constrainPlannedTestCase(
-      await this.planner.plan(input.objective, input.websiteUrl),
-      input.websiteUrl
-    );
+    const testCase =
+      input.mode === "exploratory" ? null : await this.createTestCase(input);
     const runId = createRunId(this.now(), requestId);
     const browser = await this.launchBrowser();
 
     try {
-      const task = new TestTask({
-        browser,
-        testCase,
-        screenshotDirectory: this.artifactStore.screenshotDirectory(runId)
-      });
-      const result = sanitizeTestResult(await task.run());
-      await this.artifactStore.save(runId, result);
+      const result = sanitizeTestResult(
+        input.mode === "exploratory"
+          ? await this.runExploration(
+              browser,
+              input,
+              this.artifactStore.screenshotDirectory(runId)
+            )
+          : await new TestTask({
+              browser,
+              testCase: requireTestCase(testCase),
+              screenshotDirectory: this.artifactStore.screenshotDirectory(runId)
+            }).run()
+      );
+      await this.artifactStore.save(runId, result, input);
       return { runId, status: result.status };
     } finally {
       await browser.close();
     }
+  }
+
+  private async createTestCase(input: CreateTestRequestInput): Promise<TestCase> {
+    if (!this.planner) {
+      throw new TestWorkflowUnavailableError(input.mode);
+    }
+    const planned = constrainPlannedTestCase(
+      await this.planner.plan(buildPlannerRequest(input), input.websiteUrl),
+      input.websiteUrl
+    );
+    if (!planned.steps.some(isVerificationStep)) {
+      throw new TestRequestValidationError(
+        "The generated plan did not include a verifiable expected outcome."
+      );
+    }
+    return { ...planned, goal: input.objective };
+  }
+
+  private async runExploration(
+    browser: BrowserController,
+    input: CreateTestRequestInput,
+    screenshotDirectory: string
+  ): Promise<TestResult> {
+    const targetOrigin = new URL(input.websiteUrl).origin;
+    const explorer = new ExplorationSession({
+      browser: new EvidenceBrowserController(browser, screenshotDirectory),
+      candidateGenerator: (observation, stateFingerprint, state) =>
+        sameOriginCandidates(
+          generateActionCandidates(observation, stateFingerprint, state),
+          targetOrigin
+        )
+    });
+    const result = await explorer.run({
+      startUrl: input.websiteUrl,
+      goal: `${input.objective}\nExpected behavior: ${input.expectedBehavior}`,
+      maxSteps: 12
+    });
+    return explorationToTestResult(result, input.objective);
+  }
+}
+
+function sameOriginCandidates(
+  candidates: ActionCandidate[],
+  targetOrigin: string
+): ActionCandidate[] {
+  return candidates.filter((candidate) => {
+    const action = candidate.action;
+    return action.type !== "navigate" && action.type !== "goto"
+      ? true
+      : new URL(action.url).origin === targetOrigin;
+  });
+}
+
+class EvidenceBrowserController implements BrowserController {
+  private observationIndex = 0;
+
+  constructor(
+    private readonly browser: BrowserController,
+    private readonly screenshotDirectory: string
+  ) {}
+
+  async observe(): Promise<Observation> {
+    const path = join(
+      this.screenshotDirectory,
+      `observation-${String(this.observationIndex).padStart(3, "0")}.png`
+    );
+    this.observationIndex += 1;
+    const screenshotPath = await this.browser.screenshot({ path });
+    const observation = await this.browser.observe();
+    return {
+      ...observation,
+      screenshotPath: typeof screenshotPath === "string" ? screenshotPath : null
+    };
+  }
+
+  async goto(url: string): Promise<void> {
+    await this.browser.goto(url);
+  }
+
+  async navigate(url: string): Promise<void> {
+    await this.browser.navigate(url);
+  }
+
+  async click(selector: string): Promise<void> {
+    await this.browser.click(selector);
+  }
+
+  async type(selector: string, value: string): Promise<void> {
+    await this.browser.type(selector, value);
+  }
+
+  async getText(selector: string): Promise<string> {
+    return await this.browser.getText(selector);
+  }
+
+  async wait(ms: number): Promise<void> {
+    await this.browser.wait(ms);
+  }
+
+  async screenshot(options?: { path?: string }): Promise<Uint8Array | string> {
+    return await this.browser.screenshot(options);
+  }
+
+  async assert(selector: string, containsText: string): Promise<void> {
+    await this.browser.assert(selector, containsText);
+  }
+
+  getCurrentUrl(): string {
+    return this.browser.getCurrentUrl();
   }
 }
 
@@ -200,11 +351,18 @@ export class FileTestArtifactStore implements TestArtifactStore {
     return join(this.outputRoot, runId, "screenshots");
   }
 
-  async save(runId: string, result: TestResult): Promise<void> {
+  async save(
+    runId: string,
+    result: TestResult,
+    configuration: CreateTestRequestInput
+  ): Promise<void> {
     const outputDirectory = join(this.outputRoot, runId);
     await mkdir(outputDirectory, { recursive: true });
     await Promise.all([
-      writeJson(join(outputDirectory, "report.json"), result),
+      writeJson(join(outputDirectory, "report.json"), {
+        ...result,
+        configuration
+      }),
       writeJson(join(outputDirectory, "trace.json"), result.trace)
     ]);
   }
@@ -218,9 +376,11 @@ export class TestRequestValidationError extends Error {
 }
 
 export class TestWorkflowUnavailableError extends Error {
-  constructor() {
+  constructor(mode: QATestMode) {
     super(
-      "AI test planning is not configured. Set OPENAI_API_KEY and restart the dashboard."
+      mode === "exploratory"
+        ? "Exploratory testing is not available in this workflow."
+        : `${testModeLabel(mode)} testing requires AI planning. Set OPENAI_API_KEY and restart the dashboard, or choose exploratory testing.`
     );
     this.name = "TestWorkflowUnavailableError";
   }
@@ -230,20 +390,25 @@ export function createUserTestWorkflow(
   llmClient: LLMClient | null,
   outputRoot: string
 ): UserTestWorkflow {
-  const executor = llmClient
-    ? new AgentTestRequestExecutor({
-        planner: new LLMTestPlanner(llmClient),
-        outputRoot
-      })
-    : null;
-  return new UserTestWorkflow(executor);
+  const executor = new AgentTestRequestExecutor({
+    planner: llmClient ? new LLMTestPlanner(llmClient) : null,
+    outputRoot
+  });
+  return new UserTestWorkflow(executor, {
+    availableModes: llmClient ? ALL_TEST_MODES : ["exploratory"]
+  });
 }
 
 export function validateCreateTestRequest(
   input: CreateTestRequestInput
 ): CreateTestRequestInput {
   const objective = input.objective.trim();
+  const expectedBehavior = input.expectedBehavior.trim();
   const websiteUrl = input.websiteUrl.trim();
+
+  if (!ALL_TEST_MODES.includes(input.mode)) {
+    throw new TestRequestValidationError("Select a valid testing mode.");
+  }
 
   if (objective.length === 0) {
     throw new TestRequestValidationError("Test objective is required.");
@@ -256,6 +421,19 @@ export function validateCreateTestRequest(
   if (containsLikelySecret(objective)) {
     throw new TestRequestValidationError(
       "Do not include passwords, API keys, tokens, or other secrets in the test objective."
+    );
+  }
+  if (expectedBehavior.length === 0) {
+    throw new TestRequestValidationError("Expected behavior is required.");
+  }
+  if (expectedBehavior.length > MAX_EXPECTED_BEHAVIOR_LENGTH) {
+    throw new TestRequestValidationError(
+      `Expected behavior must be ${MAX_EXPECTED_BEHAVIOR_LENGTH} characters or fewer.`
+    );
+  }
+  if (containsLikelySecret(expectedBehavior)) {
+    throw new TestRequestValidationError(
+      "Do not include passwords, API keys, tokens, or other secrets in the expected behavior."
     );
   }
   if (websiteUrl.length === 0) {
@@ -284,7 +462,123 @@ export function validateCreateTestRequest(
 
   return {
     websiteUrl: parsedUrl.toString(),
-    objective
+    objective,
+    expectedBehavior,
+    mode: input.mode
+  };
+}
+
+function buildPlannerRequest(input: CreateTestRequestInput): string {
+  const modeInstruction =
+    input.mode === "regression"
+      ? "Create a regression plan that verifies the expected behavior still holds."
+      : "Create a functional plan that exercises the objective and verifies the outcome.";
+  return [
+    `Testing mode: ${testModeLabel(input.mode)}`,
+    `Objective: ${input.objective}`,
+    `Expected behavior: ${input.expectedBehavior}`,
+    modeInstruction,
+    "Include at least one explicit assertion or expected result."
+  ].join("\n");
+}
+
+function isVerificationStep(step: TestCase["steps"][number]): boolean {
+  return step.action.type === "assert" || step.expected !== undefined;
+}
+
+function requireTestCase(testCase: TestCase | null): TestCase {
+  if (!testCase) {
+    throw new Error("A structured TestCase is required for this testing mode.");
+  }
+  return testCase;
+}
+
+function explorationToTestResult(
+  exploration: ExplorationResult,
+  objective: string
+): TestResult {
+  const executedSteps: ExecutedTestStep[] = exploration.state.executedActions.map(
+    (record, index) => {
+      const observation = exploration.state.observedPageStates.find(
+        (node) => node.fingerprint === record.toStateFingerprint
+      )?.observation;
+      return {
+        index,
+        name: `Explore with ${record.action.type}`,
+        action: record.action,
+        observation: observation ?? null,
+        status: record.success ? "passed" : "failed",
+        evaluatorFeedback: null,
+        errors: record.error ? [record.error] : []
+      };
+    }
+  );
+  const bugReports = exploration.findings.map((finding, index) =>
+    explorationFindingToBugReport(finding, exploration, index)
+  );
+  const lifecycleErrors =
+    exploration.status === "paused"
+      ? ["Exploration paused because an action requires human approval."]
+      : exploration.status === "halted" && exploration.state.errors.length === 0
+        ? ["Exploration halted before reaching a stopping condition."]
+        : [];
+  const errors = unique([
+    ...exploration.state.errors,
+    ...exploration.findings.map((finding) => finding.message),
+    ...lifecycleErrors
+  ]);
+
+  if (bugReports.length === 0 && errors.length > 0) {
+    bugReports.push({
+      title: "Exploratory test halted",
+      description: errors[0] ?? "The exploratory test halted.",
+      stepIndex: -1,
+      stepName: "Exploration session",
+      category: "evaluation",
+      evidence: {
+        url: exploration.state.currentUrl,
+        consoleErrors: [],
+        screenshot: exploration.state.screenshots.at(-1) ?? null
+      }
+    });
+  }
+
+  return {
+    goal: objective,
+    status: bugReports.length === 0 && errors.length === 0 ? "passed" : "failed",
+    executedSteps,
+    screenshots: exploration.state.screenshots,
+    errors,
+    bugReports,
+    trace: {
+      goal: objective,
+      steps: exploration.traces.flatMap((trace) => trace.steps)
+    }
+  };
+}
+
+function explorationFindingToBugReport(
+  finding: ExplorationFinding,
+  exploration: ExplorationResult,
+  index: number
+): BugReport {
+  const observation = exploration.state.observedPageStates.find(
+    (node) => node.fingerprint === finding.stateFingerprint
+  )?.observation;
+  return {
+    title:
+      finding.type === "console_error"
+        ? "Console error discovered during exploration"
+        : "Browser action failed during exploration",
+    description: finding.message,
+    stepIndex: index,
+    stepName: `Exploration finding ${index + 1}`,
+    category: finding.type === "console_error" ? "console" : "action",
+    evidence: {
+      url: finding.url,
+      consoleErrors: observation?.consoleErrors ?? [],
+      screenshot: finding.evidence[0] ?? null
+    }
   };
 }
 
@@ -334,6 +628,14 @@ function redactText(
 
 function containsLikelySecret(value: string): boolean {
   return /(?:password|passwd|api[_ -]?key|secret|token)\s*[:=]\s*\S+/i.test(value);
+}
+
+function testModeLabel(mode: QATestMode): string {
+  return `${mode[0]?.toUpperCase() ?? ""}${mode.slice(1)}`;
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 function constrainPlannedTestCase(testCase: TestCase, requestedUrl: string): TestCase {

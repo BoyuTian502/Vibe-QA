@@ -1,6 +1,6 @@
 import type { BrowserController } from "@vibeqa/agent-core";
 import type { TestPlanner } from "@vibeqa/planner";
-import type { Observation } from "@vibeqa/schemas";
+import type { ElementInformation, Observation } from "@vibeqa/schemas";
 import type { TestResult } from "@vibeqa/test-engine";
 import { describe, expect, it } from "vitest";
 
@@ -9,6 +9,8 @@ import {
   TestRequestValidationError,
   UserTestWorkflow,
   validateCreateTestRequest,
+  type CreateTestRequestInput,
+  type QATestMode,
   type TestArtifactStore
 } from "../src/test-workflow.js";
 
@@ -18,6 +20,7 @@ describe("UserTestWorkflow", () => {
       {
         execute: async (input, requestId) => {
           expect(input.objective).toBe("Test login functionality");
+          expect(input.mode).toBe("functional");
           expect(requestId).toBe("request-001");
           return { runId: "run-001", status: "passed" };
         }
@@ -28,14 +31,13 @@ describe("UserTestWorkflow", () => {
       }
     );
 
-    const request = workflow.submit({
-      websiteUrl: "http://example.test/login",
-      objective: "Test login functionality"
-    });
+    const request = workflow.submit(testInput("functional"));
 
     expect(request).toMatchObject({
       id: "request-001",
       websiteUrl: "http://example.test/login",
+      expectedBehavior: "The user reaches the dashboard",
+      mode: "functional",
       status: "queued",
       runId: null
     });
@@ -49,26 +51,34 @@ describe("UserTestWorkflow", () => {
   it("runs a planned TestCase through TestTask and the existing Agent", async () => {
     const browser = new FakeBrowserController();
     const artifacts = new MemoryArtifactStore();
+    let plannerRequest = "";
     const planner: TestPlanner = {
-      plan: async (request, startUrl) => ({
-        goal: request,
-        startUrl,
-        steps: [
-          {
-            name: "Enter password",
-            action: {
-              type: "type",
-              selector: 'input[name="password"]',
-              value: "private-value"
+      plan: async (request, startUrl) => {
+        plannerRequest = request;
+        return {
+          goal: request,
+          startUrl,
+          steps: [
+            {
+              name: "Enter password",
+              action: {
+                type: "type",
+                selector: 'input[name="password"]',
+                value: "private-value"
+              }
+            },
+            {
+              name: "Capture evidence",
+              action: { type: "screenshot", path: "C:/unsafe/model-path.png" }
+            },
+            {
+              name: "Read current URL",
+              action: { type: "getCurrentUrl" },
+              expected: { url: "http://example.test/login" }
             }
-          },
-          {
-            name: "Capture evidence",
-            action: { type: "screenshot", path: "C:/unsafe/model-path.png" }
-          },
-          { name: "Read current URL", action: { type: "getCurrentUrl" } }
-        ]
-      })
+          ]
+        };
+      }
     };
     const executor = new AgentTestRequestExecutor({
       planner,
@@ -79,14 +89,15 @@ describe("UserTestWorkflow", () => {
     });
 
     const execution = await executor.execute(
-      {
-        websiteUrl: "http://example.test/login",
-        objective: "Test login functionality"
-      },
+      testInput("functional"),
       "request-agent-001"
     );
 
     expect(execution).toMatchObject({ status: "passed" });
+    expect(plannerRequest).toContain("Testing mode: Functional");
+    expect(plannerRequest).toContain(
+      "Expected behavior: The user reaches the dashboard"
+    );
     expect(browser.navigatedUrls).toEqual(["http://example.test/login"]);
     expect(browser.closed).toBe(true);
     expect(artifacts.saved?.trace.steps.length).toBeGreaterThan(0);
@@ -100,6 +111,75 @@ describe("UserTestWorkflow", () => {
     });
     expect(JSON.stringify(artifacts.saved)).not.toContain("private-value");
     expect(JSON.stringify(artifacts.saved)).not.toContain("unsafe/model-path");
+    expect(artifacts.savedConfiguration).toEqual(testInput("functional"));
+  });
+
+  it("runs exploratory configuration through the existing ExplorationSession", async () => {
+    const browser = new FakeBrowserController([
+      {
+        id: "external-link",
+        tagName: "a",
+        role: "link",
+        accessibleName: "External site",
+        text: "External site",
+        visible: true,
+        enabled: true,
+        editable: false,
+        selector: "#external-link",
+        href: "https://outside.test/"
+      }
+    ]);
+    const artifacts = new MemoryArtifactStore();
+    const executor = new AgentTestRequestExecutor({
+      planner: null,
+      outputRoot: "unused",
+      launchBrowser: async () => browser,
+      artifactStore: artifacts
+    });
+
+    const execution = await executor.execute(
+      testInput("exploratory"),
+      "request-explore-001"
+    );
+
+    expect(execution.status).toBe("passed");
+    expect(browser.navigatedUrls).toEqual(["http://example.test/login"]);
+    expect(browser.closed).toBe(true);
+    expect(artifacts.saved?.goal).toBe("Test login functionality");
+    expect(artifacts.saved?.screenshots.length).toBeGreaterThan(0);
+    expect(artifacts.savedConfiguration?.mode).toBe("exploratory");
+  });
+
+  it("turns regression configuration into an expectation-driven plan", async () => {
+    let plannerRequest = "";
+    const executor = new AgentTestRequestExecutor({
+      planner: {
+        plan: async (request, startUrl) => {
+          plannerRequest = request;
+          return {
+            goal: "Regression check",
+            startUrl,
+            steps: [
+              {
+                name: "Confirm sign-in page",
+                action: { type: "wait", ms: 0 },
+                expected: { requiredText: "Sign in" }
+              }
+            ]
+          };
+        }
+      },
+      outputRoot: "unused",
+      launchBrowser: async () => new FakeBrowserController(),
+      artifactStore: new MemoryArtifactStore()
+    });
+
+    await expect(
+      executor.execute(testInput("regression"), "request-regression-001")
+    ).resolves.toMatchObject({ status: "passed" });
+    expect(plannerRequest).toContain("Testing mode: Regression");
+    expect(plannerRequest).toContain("Create a regression plan");
+    expect(plannerRequest).toContain("The user reaches the dashboard");
   });
 
   it("rejects planned navigation outside the submitted website", async () => {
@@ -128,7 +208,9 @@ describe("UserTestWorkflow", () => {
       executor.execute(
         {
           websiteUrl: "https://example.com/login",
-          objective: "Test login"
+          objective: "Test login",
+          expectedBehavior: "The login page remains available",
+          mode: "functional"
         },
         "request-cross-origin"
       )
@@ -138,36 +220,69 @@ describe("UserTestWorkflow", () => {
 
   it("rejects invalid URLs, embedded credentials, secrets, and empty objectives", () => {
     expect(() =>
-      validateCreateTestRequest({ websiteUrl: "not-a-url", objective: "Test login" })
+      validateCreateTestRequest({
+        ...testInput("functional"),
+        websiteUrl: "not-a-url"
+      })
     ).toThrow(TestRequestValidationError);
     expect(() =>
       validateCreateTestRequest({
         websiteUrl: "https://user:pass@example.com",
-        objective: "Test login"
+        objective: "Test login",
+        expectedBehavior: "The login page loads",
+        mode: "functional"
       })
     ).toThrow(/embedded credentials/);
     expect(() =>
       validateCreateTestRequest({
         websiteUrl: "https://example.com",
-        objective: "Test login with password=hunter2"
+        objective: "Test login with password=hunter2",
+        expectedBehavior: "The login page loads",
+        mode: "functional"
       })
     ).toThrow(/Do not include/);
     expect(() =>
-      validateCreateTestRequest({ websiteUrl: "https://example.com", objective: " " })
+      validateCreateTestRequest({
+        websiteUrl: "https://example.com",
+        objective: " ",
+        expectedBehavior: "The page loads",
+        mode: "functional"
+      })
     ).toThrow(/objective is required/);
+    expect(() =>
+      validateCreateTestRequest({
+        ...testInput("functional"),
+        mode: "invalid" as QATestMode
+      })
+    ).toThrow(/valid testing mode/);
   });
 });
 
 class MemoryArtifactStore implements TestArtifactStore {
   saved: TestResult | null = null;
+  savedConfiguration: CreateTestRequestInput | null = null;
 
   screenshotDirectory(runId: string): string {
     return `memory/${runId}/screenshots`;
   }
 
-  async save(_runId: string, result: TestResult): Promise<void> {
+  async save(
+    _runId: string,
+    result: TestResult,
+    configuration: CreateTestRequestInput
+  ): Promise<void> {
     this.saved = result;
+    this.savedConfiguration = configuration;
   }
+}
+
+function testInput(mode: QATestMode): CreateTestRequestInput {
+  return {
+    websiteUrl: "http://example.test/login",
+    objective: "Test login functionality",
+    expectedBehavior: "The user reaches the dashboard",
+    mode
+  };
 }
 
 class FakeBrowserController implements BrowserController {
@@ -175,6 +290,8 @@ class FakeBrowserController implements BrowserController {
   closed = false;
   private currentUrl = "http://example.test/";
   private observationIndex = 0;
+
+  constructor(private readonly elements: ElementInformation[] = []) {}
 
   async observe(): Promise<Observation> {
     this.observationIndex += 1;
@@ -194,9 +311,9 @@ class FakeBrowserController implements BrowserController {
       accessibility: {
         headings: [{ level: 1, text: "Sign in" }],
         landmarks: [{ role: "main", name: null }],
-        interactiveElementCount: 1
+        interactiveElementCount: this.elements.length
       },
-      elements: [],
+      elements: this.elements,
       textSample: "Sign in",
       screenshotPath: null
     };

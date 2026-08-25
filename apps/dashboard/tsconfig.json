@@ -10,6 +10,7 @@
   "references": [
     { "path": "../../packages/agent-core" },
     { "path": "../../packages/browser-playwright" },
+    { "path": "../../packages/explorer" },
     { "path": "../../packages/llm" },
     { "path": "../../packages/planner" },
     { "path": "../../packages/schemas" },

@@ -14,6 +14,7 @@ export {
 export type {
   AgentTestRequestExecutorOptions,
   CreateTestRequestInput,
+  QATestMode,
   TestArtifactStore,
   TestRequestExecutor,
   UserTestExecution,
@@ -62,7 +63,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     `Bug analysis:\n${process.env.OPENAI_API_KEY ? "OpenAI-compatible model" : "Local evidence baseline (set OPENAI_API_KEY to enable AI generation)"}\n`
   );
   console.log(
-    `User test workflow:\n${process.env.OPENAI_API_KEY ? "AI planner ready" : "Set OPENAI_API_KEY to enable natural-language test creation"}\n`
+    `User test workflow:\n${process.env.OPENAI_API_KEY ? "Functional, exploratory, and regression modes ready" : "Exploratory mode ready (set OPENAI_API_KEY for functional and regression planning)"}\n`
   );
   console.log("Press CTRL+C to stop");
 

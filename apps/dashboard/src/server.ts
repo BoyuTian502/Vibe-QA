@@ -14,6 +14,8 @@ import {
   createUserTestWorkflow,
   TestRequestValidationError,
   TestWorkflowUnavailableError,
+  type CreateTestRequestInput,
+  type QATestMode,
   type UserTestWorkflow
 } from "./test-workflow.js";
 import {
@@ -89,7 +91,12 @@ async function handleRequest(
 
     if (request.method === "POST" && requestUrl.pathname === "/tests") {
       const runs = await store.listRuns();
-      let form = { websiteUrl: "", objective: "" };
+      let form: CreateTestRequestInput = {
+        websiteUrl: "",
+        objective: "",
+        expectedBehavior: "",
+        mode: "functional" as const
+      };
       try {
         form = await readTestRequestForm(request);
         const testRequest = testWorkflow.submit(form);
@@ -105,7 +112,12 @@ async function handleRequest(
         ) {
           sendHtml(
             response,
-            renderTestCreationPage(runs, testWorkflow.available, error.message, form),
+            renderTestCreationPage(
+              runs,
+              testWorkflow.availableModes,
+              error.message,
+              form
+            ),
             error instanceof TestWorkflowUnavailableError ? 503 : 400
           );
           return;
@@ -174,7 +186,7 @@ async function handleRequest(
     if (requestUrl.pathname === "/tests/new") {
       sendHtml(
         response,
-        renderTestCreationPage(await store.listRuns(), testWorkflow.available)
+        renderTestCreationPage(await store.listRuns(), testWorkflow.availableModes)
       );
       return;
     }
@@ -335,9 +347,12 @@ function isNotFoundError(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
-async function readTestRequestForm(
-  request: IncomingMessage
-): Promise<{ websiteUrl: string; objective: string }> {
+async function readTestRequestForm(request: IncomingMessage): Promise<{
+  websiteUrl: string;
+  objective: string;
+  expectedBehavior: string;
+  mode: "functional" | "exploratory" | "regression";
+}> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
@@ -349,8 +364,11 @@ async function readTestRequestForm(
     chunks.push(buffer);
   }
   const form = new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
+  const mode = form.get("mode") ?? "";
   return {
     websiteUrl: form.get("websiteUrl") ?? "",
-    objective: form.get("objective") ?? ""
+    objective: form.get("objective") ?? "",
+    expectedBehavior: form.get("expectedBehavior") ?? "",
+    mode: mode as QATestMode
   };
 }
