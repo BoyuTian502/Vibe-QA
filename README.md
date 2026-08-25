@@ -138,6 +138,20 @@ a clearly labeled local evidence baseline, so report viewing never depends on an
 external service. `OPENAI_BASE_URL` and `OPENAI_MODEL` can optionally select a
 compatible endpoint and model.
 
+### Create A Test
+
+Set `OPENAI_API_KEY`, start the dashboard, and open **New Test**. Enter the
+website URL and a concise objective such as `Test login functionality`. Vibe-QA
+creates a typed test request, plans a `TestCase` through the existing LLM planner,
+and executes it with the existing Agent, safety policy, Test Engine, and local
+Playwright browser.
+
+The request page shows queued, running, and completed states. Finished runs save
+the standard `report.json`, `trace.json`, and screenshots under
+`run-output/demo/<timestamp>-request-<id>/`, so they appear automatically in
+History and Run Details. Test objectives reject embedded credentials and common
+secret assignments; credentials should not be entered into the objective field.
+
 ## Development
 
 Requirements: Node.js 18 or later and a supported Chrome or Chromium browser.

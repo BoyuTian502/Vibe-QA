@@ -10,13 +10,25 @@ import {
   createAnalysisClientFromEnvironment
 } from "./bug-analysis.js";
 import { ReportStore } from "./report-store.js";
-import { renderDashboardPage, renderHistoryPage } from "./view.js";
+import {
+  createUserTestWorkflow,
+  TestRequestValidationError,
+  TestWorkflowUnavailableError,
+  type UserTestWorkflow
+} from "./test-workflow.js";
+import {
+  renderDashboardPage,
+  renderHistoryPage,
+  renderTestCreationPage,
+  renderTestRequestPage
+} from "./view.js";
 
 export interface DashboardServerOptions {
   host?: string;
   port?: number;
   outputRoot?: string;
   llmClient?: LLMClient | null;
+  testWorkflow?: UserTestWorkflow;
 }
 
 export interface DashboardServer {
@@ -33,13 +45,15 @@ export async function startDashboardServer(
   const host = options.host ?? "127.0.0.1";
   const outputRoot = options.outputRoot ?? join(repositoryRoot, "run-output", "demo");
   const store = new ReportStore(outputRoot);
-  const analysisService = new BugAnalysisService(
+  const llmClient =
     options.llmClient === undefined
       ? createAnalysisClientFromEnvironment()
-      : options.llmClient
-  );
+      : options.llmClient;
+  const analysisService = new BugAnalysisService(llmClient);
+  const testWorkflow =
+    options.testWorkflow ?? createUserTestWorkflow(llmClient, outputRoot);
   const server = createServer((request, response) => {
-    void handleRequest(request, response, store, analysisService);
+    void handleRequest(request, response, store, analysisService, testWorkflow);
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -67,10 +81,40 @@ async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
   store: ReportStore,
-  analysisService: BugAnalysisService
+  analysisService: BugAnalysisService,
+  testWorkflow: UserTestWorkflow
 ): Promise<void> {
   try {
     const requestUrl = new URL(request.url ?? "/", "http://dashboard.local");
+
+    if (request.method === "POST" && requestUrl.pathname === "/tests") {
+      const runs = await store.listRuns();
+      let form = { websiteUrl: "", objective: "" };
+      try {
+        form = await readTestRequestForm(request);
+        const testRequest = testWorkflow.submit(form);
+        sendRedirect(
+          response,
+          `/test-requests/${encodeURIComponent(testRequest.id)}`,
+          303
+        );
+      } catch (error) {
+        if (
+          error instanceof TestRequestValidationError ||
+          error instanceof TestWorkflowUnavailableError
+        ) {
+          sendHtml(
+            response,
+            renderTestCreationPage(runs, testWorkflow.available, error.message, form),
+            error instanceof TestWorkflowUnavailableError ? 503 : 400
+          );
+          return;
+        }
+        throw error;
+      }
+      return;
+    }
+
     if (request.method !== "GET") {
       sendText(response, "Method not allowed", 405);
       return;
@@ -83,6 +127,17 @@ async function handleRequest(
 
     if (requestUrl.pathname === "/api/runs") {
       sendJson(response, await store.listRuns());
+      return;
+    }
+
+    const apiRequestMatch = /^\/api\/test-requests\/([^/]+)$/.exec(requestUrl.pathname);
+    if (apiRequestMatch?.[1]) {
+      const testRequest = testWorkflow.get(decodeURIComponent(apiRequestMatch[1]));
+      if (!testRequest) {
+        sendText(response, "Test request not found", 404);
+        return;
+      }
+      sendJson(response, testRequest);
       return;
     }
 
@@ -113,6 +168,26 @@ async function handleRequest(
 
     if (requestUrl.pathname === "/history") {
       sendHtml(response, renderHistoryPage(await store.listRuns()));
+      return;
+    }
+
+    if (requestUrl.pathname === "/tests/new") {
+      sendHtml(
+        response,
+        renderTestCreationPage(await store.listRuns(), testWorkflow.available)
+      );
+      return;
+    }
+
+    const testRequestMatch = /^\/test-requests\/([^/]+)$/.exec(requestUrl.pathname);
+    if (testRequestMatch?.[1]) {
+      const runs = await store.listRuns();
+      const testRequest = testWorkflow.get(decodeURIComponent(testRequestMatch[1]));
+      if (!testRequest) {
+        sendText(response, "Test request not found", 404);
+        return;
+      }
+      sendHtml(response, renderTestRequestPage(runs, testRequest));
       return;
     }
 
@@ -181,8 +256,8 @@ async function handleRequest(
   }
 }
 
-function sendHtml(response: ServerResponse, html: string): void {
-  response.writeHead(200, {
+function sendHtml(response: ServerResponse, html: string, statusCode = 200): void {
+  response.writeHead(statusCode, {
     "content-type": "text/html; charset=utf-8",
     "cache-control": "no-store",
     "content-security-policy":
@@ -210,8 +285,12 @@ function sendText(response: ServerResponse, body: string, statusCode: number): v
   response.end(body);
 }
 
-function sendRedirect(response: ServerResponse, location: string): void {
-  response.writeHead(302, {
+function sendRedirect(
+  response: ServerResponse,
+  location: string,
+  statusCode = 302
+): void {
+  response.writeHead(statusCode, {
     location,
     "cache-control": "no-store",
     "x-content-type-options": "nosniff"
@@ -254,4 +333,24 @@ function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
 
 function isNotFoundError(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+async function readTestRequestForm(
+  request: IncomingMessage
+): Promise<{ websiteUrl: string; objective: string }> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.byteLength;
+    if (size > 16_384) {
+      throw new TestRequestValidationError("Test request is too large.");
+    }
+    chunks.push(buffer);
+  }
+  const form = new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
+  return {
+    websiteUrl: form.get("websiteUrl") ?? "",
+    objective: form.get("objective") ?? ""
+  };
 }

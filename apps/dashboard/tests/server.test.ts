@@ -4,6 +4,7 @@ import { MockLLMClient } from "@vibeqa/llm";
 import { describe, expect, it } from "vitest";
 
 import { startDashboardServer } from "../src/server.js";
+import { UserTestWorkflow } from "../src/test-workflow.js";
 
 const fixtureRoot = fileURLToPath(new URL("./fixtures", import.meta.url));
 const analysisResponse = JSON.stringify({
@@ -32,6 +33,7 @@ describe("dashboard server", () => {
       expect(html).toContain("Dashboard");
       expect(html).toContain("History");
       expect(html).toContain("Run Details");
+      expect(html).toContain("New Test");
       expect(html).toContain("Execution timeline");
       expect(html).toContain("Evidence screenshots");
 
@@ -109,6 +111,82 @@ describe("dashboard server", () => {
       const response = await fetch(dashboard.url);
       expect(response.status).toBe(200);
       expect(await response.text()).toContain("No demo reports found");
+
+      const newTestPage = await fetch(`${dashboard.url}/tests/new`);
+      const newTestHtml = await newTestPage.text();
+      expect(newTestHtml).toContain("Run a website test");
+      expect(newTestHtml).toContain("AI planner not configured");
+      expect(newTestHtml).toContain("disabled");
+    } finally {
+      await dashboard.close();
+    }
+  });
+
+  it("creates a user test request and exposes its completion status", async () => {
+    const workflow = new UserTestWorkflow(
+      {
+        execute: async () => ({ runId: "demo-run-001", status: "failed" })
+      },
+      {
+        idFactory: () => "request-web-001",
+        now: () => new Date("2026-08-25T09:00:00.000Z")
+      }
+    );
+    const dashboard = await startDashboardServer({
+      host: "127.0.0.1",
+      port: 0,
+      outputRoot: fixtureRoot,
+      llmClient: null,
+      testWorkflow: workflow
+    });
+
+    try {
+      const formPage = await fetch(`${dashboard.url}/tests/new`);
+      const formHtml = await formPage.text();
+      expect(formPage.status).toBe(200);
+      expect(formHtml).toContain('name="websiteUrl"');
+      expect(formHtml).toContain('name="objective"');
+      expect(formHtml).toContain("AI planner ready");
+
+      const invalid = await fetch(`${dashboard.url}/tests`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          websiteUrl: "bad-url",
+          objective: "Test login functionality"
+        }),
+        redirect: "manual"
+      });
+      expect(invalid.status).toBe(400);
+      expect(await invalid.text()).toContain("Website URL must be a valid URL");
+
+      const created = await fetch(`${dashboard.url}/tests`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          websiteUrl: "http://example.test/login",
+          objective: "Test login functionality"
+        }),
+        redirect: "manual"
+      });
+      expect(created.status).toBe(303);
+      expect(created.headers.get("location")).toBe("/test-requests/request-web-001");
+
+      await workflow.waitForCompletion("request-web-001");
+      const statusPage = await fetch(`${dashboard.url}/test-requests/request-web-001`);
+      const statusHtml = await statusPage.text();
+      expect(statusHtml).toContain("Issue found");
+      expect(statusHtml).toContain("View test report");
+      expect(statusHtml).toContain("/runs/demo-run-001");
+
+      const apiResponse = await fetch(
+        `${dashboard.url}/api/test-requests/request-web-001`
+      );
+      await expect(apiResponse.json()).resolves.toMatchObject({
+        status: "completed",
+        runId: "demo-run-001",
+        testStatus: "failed"
+      });
     } finally {
       await dashboard.close();
     }

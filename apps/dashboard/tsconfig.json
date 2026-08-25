@@ -7,5 +7,12 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../../packages/llm" }]
+  "references": [
+    { "path": "../../packages/agent-core" },
+    { "path": "../../packages/browser-playwright" },
+    { "path": "../../packages/llm" },
+    { "path": "../../packages/planner" },
+    { "path": "../../packages/schemas" },
+    { "path": "../../packages/test-engine" }
+  ]
 }

@@ -6,8 +6,9 @@ import type {
   DashboardTimelineEvent
 } from "./types.js";
 import type { BugAnalysis } from "./bug-analysis.js";
+import type { CreateTestRequestInput, UserTestRequest } from "./test-workflow.js";
 
-export type DashboardSection = "dashboard" | "history" | "details";
+export type DashboardSection = "dashboard" | "history" | "details" | "new-test";
 
 export function renderDashboardPage(
   runs: DashboardRun[],
@@ -25,6 +26,121 @@ export function renderDashboardPage(
 export function renderHistoryPage(runs: DashboardRun[]): string {
   return renderDocument(
     runs.length > 0 ? renderHistory(runs) : renderEmptyState(runs, "history")
+  );
+}
+
+export function renderTestCreationPage(
+  runs: DashboardRun[],
+  plannerAvailable: boolean,
+  error: string | null = null,
+  values: CreateTestRequestInput = { websiteUrl: "", objective: "" }
+): string {
+  return renderDocument(`
+    <div class="app-frame">
+      ${renderSidebar(runs, runs[0]?.id ?? null, "new-test", false)}
+      <main class="main-content test-entry-shell">
+        <header class="report-header test-entry-header">
+          <div>
+            <p class="kicker">Create test request</p>
+            <h1>Run a website test</h1>
+            <p class="header-summary">Turn a testing objective into an evidence-backed browser run.</p>
+          </div>
+          <span class="planner-status planner-${plannerAvailable ? "ready" : "offline"}">
+            ${plannerAvailable ? "AI planner ready" : "AI planner not configured"}
+          </span>
+        </header>
+
+        <section class="panel test-form-panel">
+          <div class="section-heading">
+            <div>
+              <p class="section-label">Test definition</p>
+              <h2>New QA test</h2>
+            </div>
+            <span class="count-label">Local browser</span>
+          </div>
+          <form class="test-request-form" method="post" action="/tests">
+            ${error ? `<div class="form-error" role="alert">${escapeHtml(error)}</div>` : ""}
+            <label class="field-group" for="websiteUrl">
+              <span>Website URL</span>
+              <input
+                id="websiteUrl"
+                name="websiteUrl"
+                type="url"
+                inputmode="url"
+                maxlength="2048"
+                placeholder="https://example.com/login"
+                value="${escapeAttribute(values.websiteUrl)}"
+                required
+              />
+            </label>
+            <label class="field-group" for="objective">
+              <span>Test objective</span>
+              <textarea
+                id="objective"
+                name="objective"
+                maxlength="1000"
+                rows="5"
+                placeholder="Test login functionality"
+                required
+              >${escapeHtml(values.objective)}</textarea>
+            </label>
+            <div class="form-actions">
+              <span>Planning and browser execution use the existing safety policy.</span>
+              <button type="submit" ${plannerAvailable ? "" : "disabled"}>Run test</button>
+            </div>
+          </form>
+        </section>
+      </main>
+    </div>
+  `);
+}
+
+export function renderTestRequestPage(
+  runs: DashboardRun[],
+  request: UserTestRequest
+): string {
+  const isPending = request.status === "queued" || request.status === "running";
+  const statusTitle = testRequestStatusTitle(request);
+  const statusCopy = testRequestStatusCopy(request);
+  return renderDocument(
+    `
+      <div class="app-frame">
+        ${renderSidebar(runs, runs[0]?.id ?? null, "new-test", false)}
+        <main class="main-content test-entry-shell">
+          <header class="report-header test-entry-header">
+            <div>
+              <p class="kicker">Test request</p>
+              <h1>${escapeHtml(request.objective)}</h1>
+              <p class="header-summary">${escapeHtml(request.websiteUrl)}</p>
+            </div>
+            <code class="request-id">${escapeHtml(request.id)}</code>
+          </header>
+
+          <section class="panel request-status-panel request-${escapeHtml(request.status)} ${request.testStatus ? `request-result-${escapeHtml(request.testStatus)}` : ""}">
+            <div class="request-status-mark" aria-hidden="true">${request.status === "completed" ? (request.testStatus === "passed" ? "OK" : "!") : request.status === "failed" ? "!" : "..."}</div>
+            <div class="request-status-copy">
+              <p class="section-label">Execution status</p>
+              <h2>${escapeHtml(statusTitle)}</h2>
+              <p>${escapeHtml(statusCopy)}</p>
+            </div>
+            <span class="request-status-tag">${escapeHtml(request.status)}</span>
+          </section>
+
+          <section class="panel request-facts" aria-label="Test request details">
+            ${renderRequestFact("Created", formatTimestamp(request.createdAt))}
+            ${renderRequestFact("Started", request.startedAt ? formatTimestamp(request.startedAt) : "Pending")}
+            ${renderRequestFact("Completed", request.completedAt ? formatTimestamp(request.completedAt) : "Pending")}
+            ${renderRequestFact("Test result", request.testStatus ? statusLabelFor(request.testStatus) : "Pending")}
+          </section>
+
+          <div class="request-actions">
+            <a class="secondary-action" href="/tests/new">Create another test</a>
+            ${request.runId ? `<a class="primary-action" href="/runs/${encodeURIComponent(request.runId)}">View test report</a>` : ""}
+          </div>
+        </main>
+      </div>
+    `,
+    isPending ? 2 : null
   );
 }
 
@@ -172,6 +288,7 @@ function renderSidebar(
           "details",
           activeSection
         )}
+        ${renderProductNavLink("New Test", "/tests/new", "new-test", activeSection)}
       </nav>
 
       <form class="run-picker" method="get" action="/runs">
@@ -335,6 +452,43 @@ function renderMetric(label: string, value: string): string {
       <strong>${escapeHtml(value)}</strong>
     </div>
   `;
+}
+
+function renderRequestFact(label: string, value: string): string {
+  return `
+    <div>
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </div>
+  `;
+}
+
+function testRequestStatusTitle(request: UserTestRequest): string {
+  if (request.status === "queued") {
+    return "Test queued";
+  }
+  if (request.status === "running") {
+    return "Agent is testing the website";
+  }
+  if (request.status === "completed") {
+    return request.testStatus === "passed" ? "Test passed" : "Issue found";
+  }
+  return "Test could not run";
+}
+
+function testRequestStatusCopy(request: UserTestRequest): string {
+  if (request.status === "queued") {
+    return "The request is waiting for local browser execution.";
+  }
+  if (request.status === "running") {
+    return "Vibe-QA is planning actions, operating the browser, and collecting evidence.";
+  }
+  if (request.status === "completed") {
+    return request.testStatus === "passed"
+      ? "The objective completed without a detected issue."
+      : "The evaluator recorded a failure and generated a test report.";
+  }
+  return request.error ?? "The test stopped before a report could be generated.";
 }
 
 function renderSteps(steps: DashboardStep[]): string {
@@ -592,13 +746,14 @@ function formatDuration(value: number | null): string {
   return `${minutes}m ${seconds}s`;
 }
 
-function renderDocument(body: string): string {
+function renderDocument(body: string, refreshSeconds: number | null = null): string {
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light" />
+    ${refreshSeconds === null ? "" : `<meta http-equiv="refresh" content="${refreshSeconds}" />`}
     <title>Vibe-QA Report Dashboard</title>
     <style>${styles()}</style>
   </head>
@@ -619,8 +774,8 @@ function styles(): string {
     html { scroll-behavior: smooth; }
     body { margin: 0; min-height: 100vh; }
     a { color: inherit; }
-    button, select { font: inherit; }
-    button, select, .panel, .status-band, .screenshot-item { border-radius: 6px; }
+    button, input, select, textarea { font: inherit; }
+    button, input, select, textarea, .panel, .status-band, .screenshot-item { border-radius: 6px; }
     .app-frame { min-height: 100vh; }
     .sidebar {
       background: #142029;
@@ -936,6 +1091,41 @@ function styles(): string {
     .empty-state h1 { margin: 8px auto 12px; }
     .empty-state p { color: #6d7b86; line-height: 1.55; }
     .empty-state code { background: #142029; border-radius: 4px; color: white; display: inline-block; margin-top: 12px; padding: 10px 13px; }
+    .test-entry-shell { min-height: 100vh; }
+    .test-entry-header { align-items: center; }
+    .planner-status { border: 1px solid currentColor; border-radius: 4px; font-size: 0.7rem; font-weight: 900; padding: 7px 9px; text-transform: uppercase; }
+    .planner-ready { color: #187056; }
+    .planner-offline { color: #9a6815; }
+    .test-form-panel { margin: 0 auto; max-width: 900px; }
+    .test-request-form { display: grid; gap: 22px; padding: 24px; }
+    .field-group { display: grid; gap: 8px; }
+    .field-group > span { color: #53636f; font-size: 0.76rem; font-weight: 800; }
+    .field-group input, .field-group textarea { background: #fbfcfd; border: 1px solid #bcc7ce; color: #1c2733; outline: none; padding: 12px 13px; width: 100%; }
+    .field-group textarea { line-height: 1.5; resize: vertical; }
+    .field-group input:focus, .field-group textarea:focus { border-color: #245fbd; box-shadow: 0 0 0 3px #dce8fa; }
+    .form-error { background: #fff1ef; border-left: 3px solid #d94b47; color: #922f2b; font-size: 0.82rem; padding: 12px 13px; }
+    .form-actions { align-items: center; border-top: 1px solid #edf0f2; display: flex; gap: 18px; justify-content: space-between; padding-top: 18px; }
+    .form-actions span { color: #71808b; font-size: 0.74rem; line-height: 1.45; }
+    .form-actions button, .primary-action, .secondary-action { border-radius: 5px; font-size: 0.8rem; font-weight: 900; padding: 11px 15px; text-decoration: none; }
+    .form-actions button, .primary-action { background: #245fbd; border: 1px solid #245fbd; color: white; cursor: pointer; }
+    .form-actions button:disabled { background: #9ba6ad; border-color: #9ba6ad; cursor: not-allowed; }
+    .request-id { color: #71808b; font-size: 0.72rem; overflow-wrap: anywhere; }
+    .request-status-panel { align-items: center; display: grid; gap: 18px; grid-template-columns: auto minmax(0, 1fr) auto; margin: 0 auto 20px; max-width: 900px; padding: 22px; }
+    .request-status-mark { align-items: center; background: #1c2733; color: white; display: flex; font-size: 0.7rem; font-weight: 900; height: 40px; justify-content: center; width: 40px; }
+    .request-status-copy h2 { margin-top: 5px; }
+    .request-status-copy > p:last-child { color: #586875; font-size: 0.84rem; margin: 7px 0 0; }
+    .request-status-tag { border: 1px solid currentColor; border-radius: 4px; color: #53636f; font-size: 0.68rem; font-weight: 900; padding: 6px 8px; text-transform: uppercase; }
+    .request-running, .request-queued { border-left: 4px solid #c28a22; }
+    .request-completed { border-left: 4px solid #27876b; }
+    .request-failed { border-left: 4px solid #d94b47; }
+    .request-result-failed { border-left-color: #d94b47; }
+    .request-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 auto; max-width: 900px; }
+    .request-facts > div { border-right: 1px solid #edf0f2; display: grid; gap: 5px; padding: 18px; }
+    .request-facts > div:last-child { border-right: 0; }
+    .request-facts span { color: #71808b; font-size: 0.68rem; font-weight: 800; text-transform: uppercase; }
+    .request-facts strong { font-size: 0.82rem; line-height: 1.4; }
+    .request-actions { display: flex; gap: 10px; justify-content: flex-end; margin: 18px auto 0; max-width: 900px; }
+    .secondary-action { background: white; border: 1px solid #bcc7ce; color: #33434f; }
     @media (max-width: 1040px) {
       .report-grid { grid-template-columns: 1fr; }
       .issue-panel { grid-row: 1; }
@@ -945,7 +1135,7 @@ function styles(): string {
     @media (max-width: 780px) {
       .sidebar { height: auto; padding: 18px; position: static; width: 100%; }
       .section-nav { display: none; }
-      .product-nav { grid-template-columns: repeat(3, minmax(0, 1fr)); padding-bottom: 12px; }
+      .product-nav { grid-template-columns: repeat(4, minmax(0, 1fr)); padding-bottom: 12px; }
       .product-nav a { border-bottom: 3px solid transparent; border-left: 0; padding: 9px 7px; text-align: center; }
       .product-nav a.active { border-bottom-color: #f0c24b; border-left: 0; }
       .sidebar-note { margin-top: 0; }
@@ -972,6 +1162,9 @@ function styles(): string {
       .history-cell { display: grid; gap: 4px; }
       .mobile-label { color: #89969f; display: block; font-size: 0.62rem; font-weight: 900; text-transform: uppercase; }
       .history-action { border-top: 1px solid #edf0f2; padding-top: 12px; }
+      .request-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .request-facts > div:nth-child(2) { border-right: 0; }
+      .request-facts > div:nth-child(-n + 2) { border-bottom: 1px solid #edf0f2; }
     }
     @media (max-width: 480px) {
       .sidebar { gap: 18px; }
@@ -979,6 +1172,11 @@ function styles(): string {
       h1 { font-size: 1.55rem; }
       .status-band { grid-template-columns: 1fr; }
       .status-tag { grid-column: 1; }
+      .form-actions { align-items: stretch; flex-direction: column; }
+      .form-actions button { width: 100%; }
+      .request-status-panel { grid-template-columns: 1fr; }
+      .request-actions { display: grid; }
+      .primary-action, .secondary-action { text-align: center; }
       .analysis-summary { grid-template-columns: 1fr; }
       .timeline-event { gap: 9px; grid-template-columns: 12px 55px minmax(0, 1fr); }
       .timeline-url { white-space: normal; overflow-wrap: anywhere; }

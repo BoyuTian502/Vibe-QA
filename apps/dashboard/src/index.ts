@@ -3,6 +3,25 @@ import { fileURLToPath } from "node:url";
 export { ReportStore } from "./report-store.js";
 export { startDashboardServer } from "./server.js";
 export {
+  AgentTestRequestExecutor,
+  FileTestArtifactStore,
+  TestRequestValidationError,
+  TestWorkflowUnavailableError,
+  UserTestWorkflow,
+  createUserTestWorkflow,
+  validateCreateTestRequest
+} from "./test-workflow.js";
+export type {
+  AgentTestRequestExecutorOptions,
+  CreateTestRequestInput,
+  TestArtifactStore,
+  TestRequestExecutor,
+  UserTestExecution,
+  UserTestRequest,
+  UserTestRequestStatus,
+  UserTestWorkflowOptions
+} from "./test-workflow.js";
+export {
   AIBugAnalyzer,
   BugAnalysisService,
   buildBugAnalysisPrompt,
@@ -41,6 +60,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log(`Reading reports from:\n${dashboard.outputRoot}\n`);
   console.log(
     `Bug analysis:\n${process.env.OPENAI_API_KEY ? "OpenAI-compatible model" : "Local evidence baseline (set OPENAI_API_KEY to enable AI generation)"}\n`
+  );
+  console.log(
+    `User test workflow:\n${process.env.OPENAI_API_KEY ? "AI planner ready" : "Set OPENAI_API_KEY to enable natural-language test creation"}\n`
   );
   console.log("Press CTRL+C to stop");
 
