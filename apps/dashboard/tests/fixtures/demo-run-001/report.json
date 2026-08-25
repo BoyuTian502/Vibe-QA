@@ -1,0 +1,63 @@
+{
+  "goal": "Detect the fragile dashboard widget failure",
+  "status": "failed",
+  "executedSteps": [
+    {
+      "index": 0,
+      "name": "Sign in",
+      "action": {
+        "type": "click",
+        "selector": "button[type=\"submit\"]"
+      },
+      "observation": {
+        "url": "http://127.0.0.1:3000/dashboard"
+      },
+      "status": "passed",
+      "evaluatorFeedback": {
+        "success": true,
+        "reason": "The dashboard opened successfully.",
+        "shouldContinue": true
+      },
+      "errors": []
+    },
+    {
+      "index": 1,
+      "name": "Run fragile dashboard widget",
+      "action": {
+        "type": "click",
+        "selector": "#trigger-client-error"
+      },
+      "observation": {
+        "url": "http://127.0.0.1:3000/dashboard"
+      },
+      "status": "failed",
+      "evaluatorFeedback": {
+        "success": false,
+        "reason": "The page reported an uncaught JavaScript exception.",
+        "shouldContinue": false
+      },
+      "errors": ["pageerror: BUG-BENCH-005: fragile dashboard widget crashed"]
+    }
+  ],
+  "screenshots": ["C:\\fixture\\screenshots\\browser-state.svg"],
+  "errors": ["pageerror: BUG-BENCH-005: fragile dashboard widget crashed"],
+  "bugReports": [
+    {
+      "title": "Console failure in fragile dashboard widget",
+      "description": "pageerror: BUG-BENCH-005: fragile dashboard widget crashed",
+      "stepIndex": 1,
+      "stepName": "Run fragile dashboard widget",
+      "category": "console",
+      "evidence": {
+        "url": "http://127.0.0.1:3000/dashboard",
+        "consoleErrors": [
+          {
+            "type": "pageerror",
+            "text": "BUG-BENCH-005: fragile dashboard widget crashed"
+          }
+        ],
+        "screenshot": "C:\\fixture\\screenshots\\browser-state.svg"
+      }
+    }
+  ]
+}

@@ -8,7 +8,8 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b apps/benchmark-app apps/cli apps/worker packages/schemas packages/llm packages/planner packages/browser-tools packages/safety-policy packages/agent-core packages/explorer packages/browser-playwright packages/prompts packages/test-fixtures packages/test-runner packages/test-engine",
+    "build": "tsc -b apps/benchmark-app apps/cli apps/dashboard apps/worker packages/schemas packages/llm packages/planner packages/browser-tools packages/safety-policy packages/agent-core packages/explorer packages/browser-playwright packages/prompts packages/test-fixtures packages/test-runner packages/test-engine",
+    "dashboard:qa": "npm run build && node apps/dashboard/dist/index.js",
     "demo:qa": "npm run build && node apps/cli/dist/demo.js",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

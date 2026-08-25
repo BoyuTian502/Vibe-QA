@@ -35,6 +35,8 @@ Vibe-QA provides:
   `BugReport` output.
 - An exploration engine that fingerprints page states, generates and ranks
   candidates, tracks coverage, and avoids repeated actions.
+- A read-only report dashboard for test status, findings, execution traces, and
+  browser evidence.
 - An abstract planning and LLM layer with mock, OpenAI-compatible, and Ollama
   clients, without coupling the agent to one provider.
 
@@ -64,6 +66,7 @@ flowchart LR
     Agent --> Runtime["Memory + Evaluator + Trace"]
     Runtime --> Evidence["TestResult + BugReport<br/>screenshots + trace"]
     Engine --> Evidence
+    Evidence --> Dashboard["AI QA Report Dashboard"]
 ```
 
 All browser operations use typed `BrowserAction` values. The safety gate runs
@@ -80,6 +83,7 @@ the final result can be inspected rather than taken on trust.
 | Safety and contracts | `safety-policy`, `schemas` |
 | Local product under test | `apps/benchmark-app` |
 | Demo and CLI | `apps/cli` |
+| Report visualization | `apps/dashboard` |
 
 ## Demo
 
@@ -109,6 +113,18 @@ The default demo is deterministic so it remains reliable during a presentation.
 The repository also includes LLM-backed planner implementations behind the same
 interfaces, but no external model is required for this flow.
 
+## Report Dashboard
+
+After generating at least one demo run, start the local portfolio dashboard:
+
+```bash
+npm run dashboard:qa
+```
+
+Open the printed URL to review test status, detected issues, executed steps, the
+agent timeline, and captured browser screenshots. The dashboard reads existing
+artifacts from `run-output/demo/` and never modifies a test run.
+
 ## Development
 
 Requirements: Node.js 18 or later and a supported Chrome or Chromium browser.
@@ -131,6 +147,7 @@ engine, runner, explorer, and demo composition.
 apps/
   benchmark-app/       Resettable SaaS-style target with five seeded bugs
   cli/                 CLI and visible technical demo
+  dashboard/           Read-only report and evidence dashboard
   worker/              Worker application boundary
 packages/
   agent-core/          Agent loop, memory, evaluator, trace, approvals
