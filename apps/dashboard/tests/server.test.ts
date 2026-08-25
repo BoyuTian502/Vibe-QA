@@ -1,17 +1,26 @@
 import { fileURLToPath } from "node:url";
 
+import { MockLLMClient } from "@vibeqa/llm";
 import { describe, expect, it } from "vitest";
 
 import { startDashboardServer } from "../src/server.js";
 
 const fixtureRoot = fileURLToPath(new URL("./fixtures", import.meta.url));
+const analysisResponse = JSON.stringify({
+  summary: "The fragile widget crashes when activated.",
+  rootCause: "An uncaught exception occurs in the widget interaction handler.",
+  suggestedFixes: ["Handle the exception.", "Add a regression test."],
+  severity: "high",
+  severityReasoning: "The error interrupts a visible dashboard workflow."
+});
 
 describe("dashboard server", () => {
   it("renders a report, exposes structured run data, serves evidence, and closes", async () => {
     const dashboard = await startDashboardServer({
       host: "127.0.0.1",
       port: 0,
-      outputRoot: fixtureRoot
+      outputRoot: fixtureRoot,
+      llmClient: new MockLLMClient(analysisResponse)
     });
 
     try {
@@ -48,6 +57,12 @@ describe("dashboard server", () => {
       expect(detailPage.status).toBe(200);
       expect(detailHtml).toContain("Detect the fragile dashboard widget failure");
       expect(detailHtml).toContain("Detected issue");
+      expect(detailHtml).toContain("AI bug analysis");
+      expect(detailHtml).toContain("The fragile widget crashes when activated.");
+      expect(detailHtml).toContain("Likely root cause");
+      expect(detailHtml).toContain("Suggested fixes");
+      expect(detailHtml).toContain("Why this severity");
+      expect(detailHtml).toContain("AI generated");
       expect(detailHtml).toContain('aria-current="page">Run Details</a>');
 
       const selectedRun = await fetch(`${dashboard.url}/runs?run=demo-run-001`);
@@ -60,6 +75,13 @@ describe("dashboard server", () => {
         status: "failed",
         durationMs: 3000,
         screenshotCount: 1
+      });
+
+      const analysis = await fetch(`${dashboard.url}/api/runs/demo-run-001/analysis`);
+      expect(analysis.status).toBe(200);
+      await expect(analysis.json()).resolves.toMatchObject({
+        severity: "high",
+        source: "ai"
       });
 
       const image = await fetch(
@@ -79,7 +101,8 @@ describe("dashboard server", () => {
     const dashboard = await startDashboardServer({
       host: "127.0.0.1",
       port: 0,
-      outputRoot: fileURLToPath(new URL("./missing-fixtures", import.meta.url))
+      outputRoot: fileURLToPath(new URL("./missing-fixtures", import.meta.url)),
+      llmClient: null
     });
 
     try {

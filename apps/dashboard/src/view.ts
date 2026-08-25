@@ -5,17 +5,19 @@ import type {
   DashboardStep,
   DashboardTimelineEvent
 } from "./types.js";
+import type { BugAnalysis } from "./bug-analysis.js";
 
 export type DashboardSection = "dashboard" | "history" | "details";
 
 export function renderDashboardPage(
   runs: DashboardRun[],
   selectedRun: DashboardRun | null,
-  activeSection: DashboardSection = "dashboard"
+  activeSection: DashboardSection = "dashboard",
+  analysis: BugAnalysis | null = null
 ): string {
   return renderDocument(
     selectedRun
-      ? renderReport(runs, selectedRun, activeSection)
+      ? renderReport(runs, selectedRun, activeSection, analysis)
       : renderEmptyState(runs, activeSection)
   );
 }
@@ -29,7 +31,8 @@ export function renderHistoryPage(runs: DashboardRun[]): string {
 function renderReport(
   runs: DashboardRun[],
   run: DashboardRun,
-  activeSection: DashboardSection
+  activeSection: DashboardSection,
+  analysis: BugAnalysis | null
 ): string {
   const statusLabel =
     run.status === "failed" ? "Issue found" : statusLabelFor(run.status);
@@ -94,6 +97,17 @@ function renderReport(
             ${renderIssue(run.primaryIssue)}
           </section>
         </div>
+
+        <section id="analysis" class="panel analysis-panel">
+          <div class="section-heading">
+            <div>
+              <p class="section-label">Evidence explanation</p>
+              <h2>AI bug analysis</h2>
+            </div>
+            ${renderAnalysisSource(analysis)}
+          </div>
+          ${renderBugAnalysis(analysis, run.primaryIssue !== null)}
+        </section>
 
         <section id="timeline" class="panel timeline-panel">
           <div class="section-heading">
@@ -175,8 +189,9 @@ function renderSidebar(
               <a href="#overview"><span>01</span>Overview</a>
               <a href="#steps"><span>02</span>Test steps</a>
               <a href="#issue"><span>03</span>Detected issue</a>
-              <a href="#timeline"><span>04</span>Timeline</a>
-              <a href="#evidence"><span>05</span>Evidence</a>
+              <a href="#analysis"><span>04</span>AI analysis</a>
+              <a href="#timeline"><span>05</span>Timeline</a>
+              <a href="#evidence"><span>06</span>Evidence</a>
             </nav>`
           : ""
       }
@@ -391,6 +406,58 @@ function renderIssue(issue: DashboardIssue | null): string {
           : ""
       }
     </article>
+  `;
+}
+
+function renderAnalysisSource(analysis: BugAnalysis | null): string {
+  if (!analysis) {
+    return '<span class="analysis-source analysis-source-none">Not needed</span>';
+  }
+  const label = analysis.source === "ai" ? "AI generated" : "Local baseline";
+  return `<span class="analysis-source analysis-source-${escapeHtml(analysis.source)}">${label}</span>`;
+}
+
+function renderBugAnalysis(analysis: BugAnalysis | null, hasIssue: boolean): string {
+  if (!analysis) {
+    return `
+      <div class="analysis-empty">
+        <span class="result-icon result-passed">OK</span>
+        <div>
+          <strong>${hasIssue ? "Analysis unavailable" : "No bug analysis needed"}</strong>
+          <p>${hasIssue ? "The report does not contain enough structured evidence for an explanation." : "This run completed without a BugReport to analyze."}</p>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="analysis-content">
+      ${analysis.notice ? `<p class="analysis-notice">${escapeHtml(analysis.notice)}</p>` : ""}
+      <div class="analysis-summary">
+        <div>
+          <span class="analysis-label">Bug summary</span>
+          <p>${escapeHtml(analysis.summary)}</p>
+        </div>
+        <div class="severity-block severity-${escapeHtml(analysis.severity)}">
+          <span>Severity</span>
+          <strong>${escapeHtml(sentenceCase(analysis.severity))}</strong>
+        </div>
+      </div>
+      <div class="analysis-columns">
+        <div class="analysis-section">
+          <span class="analysis-label">Likely root cause</span>
+          <p>${escapeHtml(analysis.rootCause)}</p>
+        </div>
+        <div class="analysis-section">
+          <span class="analysis-label">Suggested fixes</span>
+          <ol>${analysis.suggestedFixes.map((fix) => `<li>${escapeHtml(fix)}</li>`).join("")}</ol>
+        </div>
+      </div>
+      <div class="severity-reasoning">
+        <span class="analysis-label">Why this severity</span>
+        <p>${escapeHtml(analysis.severityReasoning)}</p>
+      </div>
+    </div>
   `;
 }
 
@@ -782,6 +849,30 @@ function styles(): string {
     .evidence-link { color: #245fbd; font-size: 0.8rem; font-weight: 800; width: fit-content; }
     .issue-empty { align-items: center; display: grid; gap: 10px; justify-items: start; padding: 22px; }
     .issue-empty p { color: #6d7b86; font-size: 0.85rem; margin: 0; }
+    .analysis-panel { margin: 0 auto 20px; max-width: 1320px; }
+    .analysis-source { border: 1px solid currentColor; border-radius: 4px; font-size: 0.66rem; font-weight: 900; padding: 5px 7px; text-transform: uppercase; }
+    .analysis-source-ai { color: #245fbd; }
+    .analysis-source-baseline { color: #8a651c; }
+    .analysis-source-none { color: #6d7b86; }
+    .analysis-content { display: grid; }
+    .analysis-notice { background: #fff8e7; border-bottom: 1px solid #ecdcae; color: #71551b; font-size: 0.78rem; margin: 0; padding: 11px 20px; }
+    .analysis-summary { align-items: start; display: grid; gap: 28px; grid-template-columns: minmax(0, 1fr) auto; padding: 22px 20px; }
+    .analysis-summary p, .analysis-section p, .severity-reasoning p { color: #52616d; font-size: 0.86rem; line-height: 1.6; margin: 7px 0 0; }
+    .analysis-label { color: #6d7b86; display: block; font-size: 0.68rem; font-weight: 900; text-transform: uppercase; }
+    .severity-block { border-left: 3px solid currentColor; display: grid; gap: 3px; min-width: 112px; padding: 6px 0 6px 13px; }
+    .severity-block span { color: #71808b; font-size: 0.66rem; font-weight: 800; text-transform: uppercase; }
+    .severity-block strong { font-size: 1.05rem; }
+    .severity-low { color: #187056; }
+    .severity-medium { color: #9a6815; }
+    .severity-high, .severity-critical { color: #b43632; }
+    .analysis-columns { border-top: 1px solid #edf0f2; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .analysis-section { padding: 20px; }
+    .analysis-section + .analysis-section { border-left: 1px solid #edf0f2; }
+    .analysis-section ol { color: #52616d; display: grid; font-size: 0.84rem; gap: 9px; line-height: 1.5; margin: 9px 0 0; padding-left: 20px; }
+    .severity-reasoning { background: #f8fafb; border-top: 1px solid #edf0f2; padding: 17px 20px; }
+    .analysis-empty { align-items: center; display: flex; gap: 13px; padding: 22px; }
+    .analysis-empty strong { font-size: 0.88rem; }
+    .analysis-empty p { color: #6d7b86; font-size: 0.82rem; margin: 4px 0 0; }
     .timeline-panel { margin: 0 auto 30px; max-width: 1320px; }
     .timeline { padding: 8px 20px 18px; }
     .timeline-event {
@@ -867,6 +958,8 @@ function styles(): string {
       .metric:nth-child(2) { border-right: 0; }
       .metric:nth-child(-n + 2) { border-bottom: 1px solid #d6dde2; }
       .screenshot-grid { grid-template-columns: 1fr; }
+      .analysis-columns { grid-template-columns: 1fr; }
+      .analysis-section + .analysis-section { border-left: 0; border-top: 1px solid #edf0f2; }
       .history-table-head { display: none; }
       .history-row {
         align-items: start;
@@ -886,6 +979,7 @@ function styles(): string {
       h1 { font-size: 1.55rem; }
       .status-band { grid-template-columns: 1fr; }
       .status-tag { grid-column: 1; }
+      .analysis-summary { grid-template-columns: 1fr; }
       .timeline-event { gap: 9px; grid-template-columns: 12px 55px minmax(0, 1fr); }
       .timeline-url { white-space: normal; overflow-wrap: anywhere; }
       .page-footer { display: grid; gap: 5px; }

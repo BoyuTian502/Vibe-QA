@@ -130,6 +130,14 @@ discovered run, and **Run Details** for a stable report URL with its timeline an
 evidence. History includes run time, status, bugs found, screenshot count, and
 duration derived from the trace.
 
+Failed-run details also include a structured bug explanation with a concise
+summary, likely root cause, suggested fixes, and severity reasoning. Set
+`OPENAI_API_KEY` before starting the dashboard to generate this analysis through
+the existing OpenAI-compatible `LLMClient`. Without a key, the same section uses
+a clearly labeled local evidence baseline, so report viewing never depends on an
+external service. `OPENAI_BASE_URL` and `OPENAI_MODEL` can optionally select a
+compatible endpoint and model.
+
 ## Development
 
 Requirements: Node.js 18 or later and a supported Chrome or Chromium browser.

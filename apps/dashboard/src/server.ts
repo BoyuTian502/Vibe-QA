@@ -3,6 +3,12 @@ import { readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { LLMClient } from "@vibeqa/llm";
+
+import {
+  BugAnalysisService,
+  createAnalysisClientFromEnvironment
+} from "./bug-analysis.js";
 import { ReportStore } from "./report-store.js";
 import { renderDashboardPage, renderHistoryPage } from "./view.js";
 
@@ -10,6 +16,7 @@ export interface DashboardServerOptions {
   host?: string;
   port?: number;
   outputRoot?: string;
+  llmClient?: LLMClient | null;
 }
 
 export interface DashboardServer {
@@ -26,8 +33,13 @@ export async function startDashboardServer(
   const host = options.host ?? "127.0.0.1";
   const outputRoot = options.outputRoot ?? join(repositoryRoot, "run-output", "demo");
   const store = new ReportStore(outputRoot);
+  const analysisService = new BugAnalysisService(
+    options.llmClient === undefined
+      ? createAnalysisClientFromEnvironment()
+      : options.llmClient
+  );
   const server = createServer((request, response) => {
-    void handleRequest(request, response, store);
+    void handleRequest(request, response, store, analysisService);
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -54,7 +66,8 @@ export async function startDashboardServer(
 async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  store: ReportStore
+  store: ReportStore,
+  analysisService: BugAnalysisService
 ): Promise<void> {
   try {
     const requestUrl = new URL(request.url ?? "/", "http://dashboard.local");
@@ -70,6 +83,13 @@ async function handleRequest(
 
     if (requestUrl.pathname === "/api/runs") {
       sendJson(response, await store.listRuns());
+      return;
+    }
+
+    const analysisMatch = /^\/api\/runs\/([^/]+)\/analysis$/.exec(requestUrl.pathname);
+    if (analysisMatch?.[1]) {
+      const run = await store.loadRun(decodeURIComponent(analysisMatch[1]));
+      sendJson(response, await analysisService.analyze(run));
       return;
     }
 
@@ -119,7 +139,15 @@ async function handleRequest(
         sendText(response, "Run not found", 404);
         return;
       }
-      sendHtml(response, renderDashboardPage(runs, selectedRun, "details"));
+      sendHtml(
+        response,
+        renderDashboardPage(
+          runs,
+          selectedRun,
+          "details",
+          await analysisService.analyze(selectedRun)
+        )
+      );
       return;
     }
 
@@ -135,7 +163,8 @@ async function handleRequest(
         renderDashboardPage(
           runs,
           selectedRun,
-          requestUrl.searchParams.has("run") ? "details" : "dashboard"
+          requestUrl.searchParams.has("run") ? "details" : "dashboard",
+          selectedRun ? await analysisService.analyze(selectedRun) : null
         )
       );
       return;

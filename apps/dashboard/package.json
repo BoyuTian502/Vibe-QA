@@ -11,6 +11,9 @@
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc -p tsconfig.json"
   },
+  "dependencies": {
+    "@vibeqa/llm": "0.0.0"
+  },
   "devDependencies": {
     "@types/node": "^20.14.15"
   }
