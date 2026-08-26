@@ -2,9 +2,12 @@ import { isSuccessfulClassification } from "./classification.js";
 import type {
   BenchmarkClassification,
   BenchmarkMetrics,
+  BenchmarkPerformanceMetrics,
   BenchmarkRun,
+  DifficultyBenchmarkMetrics,
   DistributionStatistics,
   ModeBenchmarkMetrics,
+  PlannerBenchmarkMetrics,
   SafetyEventCounts,
   ScenarioBenchmarkMetrics
 } from "./types.js";
@@ -22,8 +25,9 @@ const CLASSIFICATIONS: readonly BenchmarkClassification[] = [
 export function aggregateBenchmarkMetrics(
   runs: readonly BenchmarkRun[]
 ): BenchmarkMetrics {
-  const expectedBugRuns = runs.filter((run) => run.expectedBugId !== null);
-  const cleanRuns = runs.filter((run) => run.expectedBugId === null);
+  const stepCount = describeDistribution(runs.map((run) => run.stepCount));
+  const durationMs = describeDistribution(runs.map((run) => run.durationMs));
+  const performance = aggregatePerformance(runs);
   const safetyEvents = runs.reduce<SafetyEventCounts>(
     (total, run) => ({
       allowed: total.allowed + run.safetyEvents.allowed,
@@ -34,7 +38,75 @@ export function aggregateBenchmarkMetrics(
   );
 
   return {
+    ...performance,
+    stepCount,
+    durationMs,
+    safetyEvents,
+    scenarioResults: aggregateScenarioResults(runs),
+    modePerformance: aggregateModePerformance(runs),
+    difficultyPerformance: aggregateDifficultyPerformance(runs),
+    plannerPerformance: aggregatePlannerPerformance(runs)
+  };
+}
+
+export function describeDistribution(
+  values: readonly number[]
+): DistributionStatistics {
+  if (values.length === 0) {
+    return {
+      count: 0,
+      mean: 0,
+      median: 0,
+      min: 0,
+      max: 0,
+      standardDeviation: 0
+    };
+  }
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  const median =
+    sorted.length % 2 === 0
+      ? ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2
+      : (sorted[middle] ?? 0);
+  const mean = sorted.reduce((sum, value) => sum + value, 0) / sorted.length;
+  const variance =
+    sorted.reduce((sum, value) => sum + (value - mean) ** 2, 0) / sorted.length;
+  return {
+    count: sorted.length,
+    mean,
+    median,
+    min: sorted[0] ?? 0,
+    max: sorted.at(-1) ?? 0,
+    standardDeviation: Math.sqrt(variance)
+  };
+}
+
+export function calculateRepeatedRunStability(runs: readonly BenchmarkRun[]): number {
+  const grouped = groupBy(runs, (run) => `${run.planner}:${run.scenarioId}`);
+  const scenarioRates = [...grouped.values()].map((scenarioRuns) =>
+    rate(
+      scenarioRuns.filter((run) => isSuccessfulClassification(run.classification))
+        .length,
+      scenarioRuns.length
+    )
+  );
+  return scenarioRates.length === 0
+    ? 0
+    : scenarioRates.reduce((sum, value) => sum + value, 0) / scenarioRates.length;
+}
+
+function aggregatePerformance(
+  runs: readonly BenchmarkRun[]
+): BenchmarkPerformanceMetrics {
+  const expectedBugRuns = runs.filter((run) => run.expectedBugId !== null);
+  const cleanRuns = runs.filter((run) => run.expectedBugId === null);
+  const explorationRuns = runs.filter((run) => run.exploration !== null);
+  const steps = describeDistribution(runs.map((run) => run.stepCount));
+  const durations = describeDistribution(runs.map((run) => run.durationMs));
+  return {
     totalRuns: runs.length,
+    expectedBugOpportunities: expectedBugRuns.length,
+    cleanRunOpportunities: cleanRuns.length,
     taskSuccessRate: rate(
       runs.filter((run) => isSuccessfulClassification(run.classification)).length,
       runs.length
@@ -53,47 +125,27 @@ export function aggregateBenchmarkMetrics(
       runs.length
     ),
     repeatedRunStability: calculateRepeatedRunStability(runs),
-    stepCount: describeDistribution(runs.map((run) => run.stepCount)),
-    durationMs: describeDistribution(runs.map((run) => run.durationMs)),
-    safetyEvents,
-    scenarioResults: aggregateScenarioResults(runs),
-    modePerformance: aggregateModePerformance(runs)
-  };
-}
-
-export function describeDistribution(
-  values: readonly number[]
-): DistributionStatistics {
-  if (values.length === 0) {
-    return { count: 0, mean: 0, median: 0, min: 0, max: 0 };
-  }
-  const sorted = [...values].sort((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  const median =
-    sorted.length % 2 === 0
-      ? ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2
-      : (sorted[middle] ?? 0);
-  return {
-    count: sorted.length,
-    mean: sorted.reduce((sum, value) => sum + value, 0) / sorted.length,
-    median,
-    min: sorted[0] ?? 0,
-    max: sorted.at(-1) ?? 0
-  };
-}
-
-export function calculateRepeatedRunStability(runs: readonly BenchmarkRun[]): number {
-  const grouped = groupBy(runs, (run) => run.scenarioId);
-  const scenarioRates = [...grouped.values()].map((scenarioRuns) =>
-    rate(
-      scenarioRuns.filter((run) => isSuccessfulClassification(run.classification))
-        .length,
-      scenarioRuns.length
+    averageStepCount: steps.mean,
+    medianStepCount: steps.median,
+    averageDurationMs: durations.mean,
+    medianDurationMs: durations.median,
+    averageUniquePageStates: averageExploration(
+      explorationRuns,
+      (run) => run.exploration?.uniquePageStates ?? 0
+    ),
+    averageCandidateActionsAttempted: averageExploration(
+      explorationRuns,
+      (run) => run.exploration?.candidateActionsAttempted ?? 0
+    ),
+    averageUniqueInteractiveElements: averageExploration(
+      explorationRuns,
+      (run) => run.exploration?.uniqueInteractiveElements ?? 0
+    ),
+    averageCoverageScore: averageExploration(
+      explorationRuns,
+      (run) => run.exploration?.coverageScore ?? 0
     )
-  );
-  return scenarioRates.length === 0
-    ? 0
-    : scenarioRates.reduce((sum, value) => sum + value, 0) / scenarioRates.length;
+  };
 }
 
 function aggregateScenarioResults(
@@ -104,19 +156,17 @@ function aggregateScenarioResults(
     if (!first) {
       throw new Error("Scenario metrics require at least one run.");
     }
+    const expectedOutcomes = scenarioRuns.filter((run) =>
+      isSuccessfulClassification(run.classification)
+    ).length;
     return {
       scenarioId: first.scenarioId,
       scenarioName: first.scenarioName,
       mode: first.mode,
+      difficulty: first.difficulty,
       totalRuns: scenarioRuns.length,
-      expectedOutcomes: scenarioRuns.filter((run) =>
-        isSuccessfulClassification(run.classification)
-      ).length,
-      expectedOutcomeRate: rate(
-        scenarioRuns.filter((run) => isSuccessfulClassification(run.classification))
-          .length,
-        scenarioRuns.length
-      ),
+      expectedOutcomes,
+      expectedOutcomeRate: rate(expectedOutcomes, scenarioRuns.length),
       classifications: Object.fromEntries(
         CLASSIFICATIONS.map((classification) => [
           classification,
@@ -130,39 +180,42 @@ function aggregateScenarioResults(
 function aggregateModePerformance(
   runs: readonly BenchmarkRun[]
 ): ModeBenchmarkMetrics[] {
-  return [...groupBy(runs, (run) => run.mode).entries()].map(([mode, modeRuns]) => {
-    const metrics = aggregateModeRates(modeRuns);
-    return { mode, ...metrics };
-  });
+  return [...groupBy(runs, (run) => run.mode).entries()].map(([mode, modeRuns]) => ({
+    mode,
+    ...aggregatePerformance(modeRuns)
+  }));
 }
 
-function aggregateModeRates(
+function aggregateDifficultyPerformance(
   runs: readonly BenchmarkRun[]
-): Omit<ModeBenchmarkMetrics, "mode"> {
-  const expectedBugRuns = runs.filter((run) => run.expectedBugId !== null);
-  const cleanRuns = runs.filter((run) => run.expectedBugId === null);
-  return {
-    totalRuns: runs.length,
-    taskSuccessRate: rate(
-      runs.filter((run) => isSuccessfulClassification(run.classification)).length,
-      runs.length
-    ),
-    bugDetectionRate: rate(
-      expectedBugRuns.filter((run) => run.classification === "EXPECTED_BUG_FOUND")
-        .length,
-      expectedBugRuns.length
-    ),
-    falsePositiveRate: rate(
-      cleanRuns.filter((run) => run.classification === "FALSE_POSITIVE").length,
-      cleanRuns.length
-    ),
-    infrastructureErrorRate: rate(
-      runs.filter((run) => run.classification === "AGENT_ERROR").length,
-      runs.length
-    ),
-    averageStepCount: describeDistribution(runs.map((run) => run.stepCount)).mean,
-    averageDurationMs: describeDistribution(runs.map((run) => run.durationMs)).mean
-  };
+): DifficultyBenchmarkMetrics[] {
+  return [...groupBy(runs, (run) => run.difficulty).entries()].map(
+    ([difficulty, difficultyRuns]) => ({
+      difficulty,
+      ...aggregatePerformance(difficultyRuns)
+    })
+  );
+}
+
+function aggregatePlannerPerformance(
+  runs: readonly BenchmarkRun[]
+): PlannerBenchmarkMetrics[] {
+  return [...groupBy(runs, (run) => run.planner).entries()].map(
+    ([planner, plannerRuns]) => ({
+      planner,
+      modelName: plannerRuns.find((run) => run.modelName)?.modelName ?? null,
+      ...aggregatePerformance(plannerRuns)
+    })
+  );
+}
+
+function averageExploration(
+  runs: readonly BenchmarkRun[],
+  valueFor: (run: BenchmarkRun) => number
+): number {
+  return runs.length === 0
+    ? 0
+    : runs.reduce((sum, run) => sum + valueFor(run), 0) / runs.length;
 }
 
 function rate(numerator: number, denominator: number): number {

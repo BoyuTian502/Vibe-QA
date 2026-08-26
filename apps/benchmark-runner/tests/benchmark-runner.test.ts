@@ -12,9 +12,18 @@ describe("Vibe-QA benchmark runner integration", () => {
     try {
       const result = await new BenchmarkRunner(
         new BenchmarkPlaywrightExecutor({ benchmark })
-      ).run(createBenchmarkScenarios(benchmark.url), { runsPerScenario: 1 });
+      ).run(createBenchmarkScenarios(benchmark.url), {
+        runsPerScenario: 1,
+        scenarioIds: [
+          "login",
+          "invalid-login",
+          "bug-widget-crash",
+          "logout-session-leak",
+          "dashboard-exploration"
+        ]
+      });
 
-      expect(result.runs).toHaveLength(6);
+      expect(result.runs).toHaveLength(5);
       expect(result.runs).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -31,8 +40,9 @@ describe("Vibe-QA benchmark runner integration", () => {
             detectedBugIds: ["BUG-BENCH-005"]
           }),
           expect.objectContaining({
-            scenarioId: "settings-navigation",
-            classification: "PASS"
+            scenarioId: "logout-session-leak",
+            classification: "EXPECTED_BUG_FOUND",
+            detectedBugIds: ["BUG-BENCH-002"]
           }),
           expect.objectContaining({
             scenarioId: "dashboard-exploration",

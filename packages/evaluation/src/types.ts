@@ -1,5 +1,9 @@
 export type BenchmarkMode = "functional" | "exploratory" | "regression";
 
+export type BenchmarkDifficulty = "easy" | "medium" | "hard";
+
+export type BenchmarkPlanner = "deterministic" | "ollama";
+
 export type BenchmarkClassification =
   | "PASS"
   | "EXPECTED_BUG_FOUND"
@@ -23,6 +27,7 @@ export interface BenchmarkScenario {
   id: string;
   name: string;
   mode: BenchmarkMode;
+  difficulty: BenchmarkDifficulty;
   startUrl: string;
   objective: string;
   expectedOutcome: string;
@@ -42,6 +47,7 @@ export interface ExplorationBenchmarkDetails {
   uniquePageStates: number;
   uniqueInteractiveElements: number;
   candidateActionsAttempted: number;
+  coverageScore: number;
   terminationReason: string | null;
 }
 
@@ -62,6 +68,9 @@ export interface BenchmarkRun {
   scenarioName: string;
   repetition: number;
   mode: BenchmarkMode;
+  difficulty: BenchmarkDifficulty;
+  planner: BenchmarkPlanner;
+  modelName: string | null;
   startedAt: string;
   classification: BenchmarkClassification;
   expectedOutcomeMet: boolean;
@@ -81,49 +90,81 @@ export interface DistributionStatistics {
   median: number;
   min: number;
   max: number;
+  standardDeviation: number;
+}
+
+export interface BenchmarkPerformanceMetrics {
+  totalRuns: number;
+  expectedBugOpportunities: number;
+  cleanRunOpportunities: number;
+  taskSuccessRate: number;
+  bugDetectionRate: number;
+  falsePositiveRate: number;
+  infrastructureErrorRate: number;
+  repeatedRunStability: number;
+  averageStepCount: number;
+  medianStepCount: number;
+  averageDurationMs: number;
+  medianDurationMs: number;
+  averageUniquePageStates: number;
+  averageCandidateActionsAttempted: number;
+  averageUniqueInteractiveElements: number;
+  averageCoverageScore: number;
 }
 
 export interface ScenarioBenchmarkMetrics {
   scenarioId: string;
   scenarioName: string;
   mode: BenchmarkMode;
+  difficulty: BenchmarkDifficulty;
   totalRuns: number;
   expectedOutcomes: number;
   expectedOutcomeRate: number;
   classifications: Record<BenchmarkClassification, number>;
 }
 
-export interface ModeBenchmarkMetrics {
+export interface ModeBenchmarkMetrics extends BenchmarkPerformanceMetrics {
   mode: BenchmarkMode;
-  totalRuns: number;
-  taskSuccessRate: number;
-  bugDetectionRate: number;
-  falsePositiveRate: number;
-  infrastructureErrorRate: number;
-  averageStepCount: number;
-  averageDurationMs: number;
 }
 
-export interface BenchmarkMetrics {
-  totalRuns: number;
-  taskSuccessRate: number;
-  bugDetectionRate: number;
-  falsePositiveRate: number;
-  infrastructureErrorRate: number;
-  repeatedRunStability: number;
+export interface DifficultyBenchmarkMetrics extends BenchmarkPerformanceMetrics {
+  difficulty: BenchmarkDifficulty;
+}
+
+export interface PlannerBenchmarkMetrics extends BenchmarkPerformanceMetrics {
+  planner: BenchmarkPlanner;
+  modelName: string | null;
+}
+
+export interface BenchmarkMetrics extends BenchmarkPerformanceMetrics {
   stepCount: DistributionStatistics;
   durationMs: DistributionStatistics;
   safetyEvents: SafetyEventCounts;
   scenarioResults: ScenarioBenchmarkMetrics[];
   modePerformance: ModeBenchmarkMetrics[];
+  difficultyPerformance: DifficultyBenchmarkMetrics[];
+  plannerPerformance: PlannerBenchmarkMetrics[];
+}
+
+export interface BenchmarkApplicationConfiguration {
+  name: string;
+  version: string;
+  configuration: string;
 }
 
 export interface BenchmarkConfiguration {
   runsPerScenario: number;
+  scenarioIds: string[];
   scenarioFilter: string[];
   modeFilter: BenchmarkMode[];
-  planner: "deterministic";
+  difficultyFilter: BenchmarkDifficulty[];
+  planner: BenchmarkPlanner;
+  planners: BenchmarkPlanner[];
+  plannerModels: Partial<Record<BenchmarkPlanner, string>>;
   browserIsolation: "fresh-context-per-run";
+  gitCommitSha: string | null;
+  benchmarkApplication: BenchmarkApplicationConfiguration;
+  randomSeed: null;
 }
 
 export interface BenchmarkSuiteResult {
@@ -139,8 +180,14 @@ export interface BenchmarkRunOptions {
   runsPerScenario?: number;
   scenarioIds?: readonly string[];
   modes?: readonly BenchmarkMode[];
+  difficulties?: readonly BenchmarkDifficulty[];
+  planners?: readonly BenchmarkPlanner[];
 }
 
 export interface BenchmarkScenarioExecutor {
-  execute(scenario: BenchmarkScenario, repetition: number): Promise<BenchmarkExecution>;
+  execute(
+    scenario: BenchmarkScenario,
+    repetition: number,
+    planner: BenchmarkPlanner
+  ): Promise<BenchmarkExecution>;
 }

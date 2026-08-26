@@ -3,6 +3,7 @@ import type { BrowserController } from "@vibeqa/agent-core";
 import { PlaywrightBrowserController } from "@vibeqa/browser-playwright";
 import type {
   BenchmarkExecution,
+  BenchmarkPlanner,
   BenchmarkScenario,
   BenchmarkScenarioExecutor,
   SafetyEventCounts
@@ -10,6 +11,10 @@ import type {
 import { ExplorationSession, type ExplorationResult } from "@vibeqa/explorer";
 import { TestTask, type TestResult } from "@vibeqa/test-engine";
 
+import {
+  DeterministicBenchmarkPlannerStrategy,
+  type BenchmarkPlannerStrategy
+} from "./planner-strategies.js";
 import { benchmarkCredentials, type ExecutableBenchmarkScenario } from "./scenarios.js";
 
 interface ClosableBrowserController extends BrowserController {
@@ -19,32 +24,50 @@ interface ClosableBrowserController extends BrowserController {
 export interface BenchmarkPlaywrightExecutorOptions {
   benchmark: BenchmarkServer;
   launchBrowser?: () => Promise<ClosableBrowserController>;
+  plannerStrategies?: Partial<Record<BenchmarkPlanner, BenchmarkPlannerStrategy>>;
   now?: () => number;
-  onRunStart?: (scenario: BenchmarkScenario, repetition: number) => void;
+  onRunStart?: (
+    scenario: BenchmarkScenario,
+    repetition: number,
+    planner: BenchmarkPlanner
+  ) => void;
 }
 
 export class BenchmarkPlaywrightExecutor implements BenchmarkScenarioExecutor {
   private readonly launchBrowser: () => Promise<ClosableBrowserController>;
   private readonly now: () => number;
+  private readonly plannerStrategies: Partial<
+    Record<BenchmarkPlanner, BenchmarkPlannerStrategy>
+  >;
 
   constructor(private readonly options: BenchmarkPlaywrightExecutorOptions) {
     this.launchBrowser =
       options.launchBrowser ??
       (async () => await PlaywrightBrowserController.launch({ headless: true }));
     this.now = options.now ?? Date.now;
+    this.plannerStrategies = {
+      deterministic: new DeterministicBenchmarkPlannerStrategy(),
+      ...options.plannerStrategies
+    };
   }
 
   async execute(
     scenario: BenchmarkScenario,
-    repetition: number
+    repetition: number,
+    planner: BenchmarkPlanner = "deterministic"
   ): Promise<BenchmarkExecution> {
     const executable = scenario as ExecutableBenchmarkScenario;
-    this.options.onRunStart?.(scenario, repetition);
+    this.options.onRunStart?.(scenario, repetition, planner);
     this.options.benchmark.reset();
     const startedAt = this.now();
     let browser: ClosableBrowserController | null = null;
 
     try {
+      const strategy = this.plannerStrategies[planner];
+      if (!strategy) {
+        throw new Error(`No benchmark planner strategy is configured for ${planner}.`);
+      }
+      const prepared = await strategy.prepare(executable);
       browser = await this.launchBrowser();
       const benchmarkBrowser = new CompactEvidenceBrowserController(browser);
       if (scenario.mode === "exploratory") {
@@ -53,7 +76,7 @@ export class BenchmarkPlaywrightExecutor implements BenchmarkScenarioExecutor {
           browser: benchmarkBrowser
         }).run({
           startUrl: scenario.startUrl,
-          goal: scenario.objective,
+          goal: prepared.explorationGoal,
           maxSteps: scenario.maxSteps
         });
         return explorationExecution(
@@ -63,15 +86,15 @@ export class BenchmarkPlaywrightExecutor implements BenchmarkScenarioExecutor {
         );
       }
 
-      if (!executable.testCase) {
+      if (!prepared.testCase) {
         throw new Error(`Scenario ${scenario.id} does not define a TestCase.`);
       }
       const result = await new TestTask({
         browser: benchmarkBrowser,
-        testCase: executable.testCase,
+        testCase: prepared.testCase,
         screenshotDirectory: "run-output/benchmark-discarded-evidence"
       }).run();
-      return testExecution(scenario, result, Math.max(0, this.now() - startedAt));
+      return testExecution(executable, result, Math.max(0, this.now() - startedAt));
     } finally {
       await browser?.close();
     }
@@ -123,16 +146,29 @@ class CompactEvidenceBrowserController implements BrowserController {
 }
 
 function testExecution(
-  scenario: BenchmarkScenario,
+  scenario: ExecutableBenchmarkScenario,
   result: TestResult,
   durationMs: number
 ): BenchmarkExecution {
   const detectedBugIds = extractBugIds(result);
+  if (
+    scenario.expectedBugId &&
+    scenario.expectedFailureSignature &&
+    result.bugReports.some(
+      (bug) =>
+        bug.stepName === scenario.expectedFailureSignature?.stepName &&
+        bug.category === scenario.expectedFailureSignature.category &&
+        bug.description.includes(scenario.expectedFailureSignature.descriptionIncludes)
+    )
+  ) {
+    detectedBugIds.push(scenario.expectedBugId);
+  }
+  const uniqueBugIds = [...new Set(detectedBugIds)];
   return {
     expectedOutcomeMet: scenario.expectedBugId
-      ? detectedBugIds.includes(scenario.expectedBugId)
+      ? uniqueBugIds.includes(scenario.expectedBugId)
       : result.status === "passed",
-    detectedBugIds,
+    detectedBugIds: uniqueBugIds,
     reportedBugCount: result.bugReports.length,
     infrastructureError: setupError(result),
     stepCount: result.executedSteps.length,
@@ -155,6 +191,23 @@ function explorationExecution(
     result.state.discoveredInteractiveElements.length >=
       criteria.minInteractiveElements &&
     result.state.executedActions.length >= criteria.minCandidateActions;
+  const coverageScore =
+    criteria.type === "exploration_coverage"
+      ? average([
+          coverageRatio(
+            result.state.uniquePageStateCount,
+            criteria.minUniquePageStates
+          ),
+          coverageRatio(
+            result.state.discoveredInteractiveElements.length,
+            criteria.minInteractiveElements
+          ),
+          coverageRatio(
+            result.state.executedActions.length,
+            criteria.minCandidateActions
+          )
+        ])
+      : 0;
   return {
     expectedOutcomeMet,
     detectedBugIds,
@@ -170,9 +223,20 @@ function explorationExecution(
       uniquePageStates: result.state.uniquePageStateCount,
       uniqueInteractiveElements: result.state.discoveredInteractiveElements.length,
       candidateActionsAttempted: result.state.executedActions.length,
+      coverageScore,
       terminationReason: result.stopReason
     }
   };
+}
+
+function coverageRatio(actual: number, target: number): number {
+  return target === 0 ? 1 : Math.min(actual / target, 1);
+}
+
+function average(values: readonly number[]): number {
+  return values.length === 0
+    ? 0
+    : values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 function countSafetyEvents(

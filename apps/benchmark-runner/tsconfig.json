@@ -13,6 +13,8 @@
     { "path": "../../packages/browser-playwright" },
     { "path": "../../packages/evaluation" },
     { "path": "../../packages/explorer" },
+    { "path": "../../packages/llm" },
+    { "path": "../../packages/schemas" },
     { "path": "../../packages/test-engine" }
   ]
 }

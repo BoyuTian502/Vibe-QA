@@ -216,21 +216,59 @@ have status `failed` because it exposed a defect while the benchmark result is
 `EXPECTED_BUG_FOUND`, which counts as a successful evaluation outcome.
 
 The baseline suite covers successful and rejected authentication, authenticated
-dashboard access, normal settings navigation, the seeded fragile-widget defect,
-and deterministic exploratory coverage.
+dashboard access, project and settings navigation, post-logout route protection,
+the seeded fragile-widget defect, and deterministic exploratory coverage.
 
 Each repetition resets the benchmark data and launches a fresh isolated browser
 context. The default suite uses deterministic scenarios and requires no external
-LLM or paid API. Compact `summary.json` and `runs.json` artifacts are written to
-`run-output/benchmark/<timestamp>/`; credentials, raw traces, and screenshots are
-not included.
+LLM or paid API. Compact `summary.json`, `runs.json`, and `benchmark-report.md`
+artifacts are written to `run-output/benchmark/<timestamp>/`; credentials, raw
+traces, and screenshots are not included.
+
+## Benchmark Comparison
+
+The deterministic strategy is the default reproducible baseline. An optional
+Ollama strategy uses the existing `LLMClient` abstraction and
+`qwen2.5-coder:7b` to order known safe scenario steps. Typed credential values
+are inserted only during local execution and are not sent to the model. Ollama
+must be running locally with the model installed; Vibe-QA reports a clear error
+instead of silently falling back when it is unavailable.
+
+```bash
+npm run benchmark:qa -- --planner deterministic --runs 10
+npm run benchmark:qa -- --planner ollama --runs 5
+npm run benchmark:qa -- --difficulty hard --runs 10
+npm run benchmark:qa -- --planner ollama --mode exploratory --runs 5
+npm run benchmark:qa -- --compare deterministic,ollama --runs 5
+```
+
+Scenarios are labeled by meaningful execution demands:
+
+- `easy`: short direct workflows with obvious controls.
+- `medium`: multi-step state transitions, validation, navigation, or seeded bug
+  verification.
+- `hard`: exploratory discovery with broader candidate and page-state coverage.
+
+Reports group task success, bug detection, false positives, infrastructure
+errors, steps, duration, and repeated-run stability by planner, mode,
+difficulty, and scenario. Exploratory groups also include page states,
+interactive elements, candidate actions, and normalized coverage. Duration and
+step distributions include count, mean, median, minimum, maximum, and standard
+deviation. Same-session multi-planner runs additionally create
+`comparison.json`; a comparison column is never emitted for a strategy that was
+not executed.
+
+The generated Markdown report includes configuration and Git revision metadata
+alongside explicit limitations. It is a controlled-site evaluation, not a claim
+of universal website-testing accuracy, and Ollama results can vary by model and
+environment.
 
 ## Repository Map
 
 ```text
 apps/
   benchmark-app/       Resettable SaaS-style target with five seeded bugs
-  benchmark-runner/    Deterministic repeated evaluation CLI
+  benchmark-runner/    Comparative repeated evaluation CLI
   cli/                 CLI and visible technical demo
   dashboard/           Read-only report and evidence dashboard
   worker/              Worker application boundary

@@ -1,3 +1,7 @@
+import { mkdtemp, readFile, rmdir, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -7,7 +11,10 @@ import {
   classifyBenchmarkRun,
   describeDistribution,
   filterBenchmarkScenarios,
+  formatBenchmarkMarkdownReport,
   formatBenchmarkSummary,
+  formatPlannerComparison,
+  writeBenchmarkReport,
   type BenchmarkExecution,
   type BenchmarkRun,
   type BenchmarkScenario
@@ -140,7 +147,8 @@ describe("benchmark metrics", () => {
       mean: 4000,
       median: 4000,
       min: 1000,
-      max: 7000
+      max: 7000,
+      standardDeviation: Math.sqrt(5_000_000)
     });
     const metrics = aggregateBenchmarkMetrics(runs);
     expect(metrics.durationMs.mean).toBe(4000);
@@ -158,6 +166,44 @@ describe("benchmark metrics", () => {
       approvalRequired: 1
     });
   });
+
+  it("calculates population standard deviation", () => {
+    expect(describeDistribution([2, 4, 4, 4, 5, 5, 7, 9]).standardDeviation).toBe(2);
+  });
+
+  it("groups performance by planner, mode, and difficulty", () => {
+    const groupedRuns = [
+      run({ id: "det-easy", difficulty: "easy" }),
+      run({
+        id: "ollama-hard",
+        planner: "ollama",
+        modelName: "qwen2.5-coder:7b",
+        mode: "exploratory",
+        difficulty: "hard",
+        exploration: {
+          uniquePageStates: 4,
+          uniqueInteractiveElements: 12,
+          candidateActionsAttempted: 3,
+          coverageScore: 0.8,
+          terminationReason: "max_steps"
+        }
+      })
+    ];
+    const metrics = aggregateBenchmarkMetrics(groupedRuns);
+
+    expect(metrics.plannerPerformance).toHaveLength(2);
+    expect(metrics.modePerformance).toHaveLength(2);
+    expect(metrics.difficultyPerformance).toHaveLength(2);
+    expect(
+      metrics.plannerPerformance.find((item) => item.planner === "ollama")
+    ).toMatchObject({
+      modelName: "qwen2.5-coder:7b",
+      averageUniquePageStates: 4,
+      averageCandidateActionsAttempted: 3,
+      averageUniqueInteractiveElements: 12,
+      averageCoverageScore: 0.8
+    });
+  });
 });
 
 describe("benchmark runner", () => {
@@ -173,6 +219,18 @@ describe("benchmark runner", () => {
         (item) => item.id
       )
     ).toEqual(["clean"]);
+  });
+
+  it("filters scenarios by difficulty", () => {
+    const scenarios = [
+      scenario({ id: "easy", difficulty: "easy" }),
+      scenario({ id: "hard", difficulty: "hard" })
+    ];
+    expect(
+      filterBenchmarkScenarios(scenarios, { difficulties: ["hard"] }).map(
+        (item) => item.id
+      )
+    ).toEqual(["hard"]);
   });
 
   it("executes multiple repeated runs", async () => {
@@ -197,6 +255,23 @@ describe("benchmark runner", () => {
     expect(calls).toBe(6);
     expect(result.runs).toHaveLength(6);
     expect(result.metrics.totalRuns).toBe(6);
+    expect(result.configuration.planner).toBe("deterministic");
+    expect(result.runs.every((item) => item.planner === "deterministic")).toBe(true);
+  });
+
+  it("executes and groups multiple planner strategies", async () => {
+    const result = await new BenchmarkRunner({
+      execute: async () => execution()
+    }).run([scenario()], {
+      runsPerScenario: 2,
+      planners: ["deterministic", "ollama"]
+    });
+
+    expect(result.runs).toHaveLength(4);
+    expect(result.metrics.plannerPerformance.map((item) => item.planner)).toEqual([
+      "deterministic",
+      "ollama"
+    ]);
   });
 
   it("redacts credential-like infrastructure errors from structured output", async () => {
@@ -220,7 +295,73 @@ describe("benchmark runner", () => {
 
     expect(summary).toContain("Vibe-QA Evaluation Benchmark");
     expect(summary).toContain("Task Success Rate: 100.0%");
-    expect(summary).toContain("Planner: deterministic");
+    expect(summary).toContain("Planner strategies: deterministic");
+  });
+
+  it("serializes reproducibility metadata", async () => {
+    const result = await new BenchmarkRunner(
+      { execute: async () => execution() },
+      {
+        gitCommitSha: "abc123",
+        plannerModels: { ollama: "qwen2.5-coder:7b" },
+        benchmarkApplication: {
+          name: "benchmark-saas-workspace",
+          version: "1.0.0",
+          configuration: "seeded-fixture"
+        }
+      }
+    ).run([scenario()], {
+      runsPerScenario: 1,
+      planners: ["ollama"],
+      difficulties: ["medium"]
+    });
+
+    expect(result.configuration).toMatchObject({
+      planner: "ollama",
+      planners: ["ollama"],
+      plannerModels: { ollama: "qwen2.5-coder:7b" },
+      gitCommitSha: "abc123",
+      difficultyFilter: ["medium"],
+      scenarioIds: ["clean"],
+      randomSeed: null
+    });
+  });
+
+  it("formats planner comparison without inventing unexecuted planners", () => {
+    const comparison = formatPlannerComparison(
+      aggregateBenchmarkMetrics([run()]).plannerPerformance
+    );
+
+    expect(comparison).toContain("Deterministic");
+    expect(comparison).not.toContain("Ollama");
+  });
+
+  it("generates Markdown and comparison artifacts", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "vibeqa-evaluation-"));
+    const result = await new BenchmarkRunner({
+      execute: async () => execution()
+    }).run([scenario()], {
+      runsPerScenario: 1,
+      planners: ["deterministic", "ollama"]
+    });
+
+    try {
+      const paths = await writeBenchmarkReport(directory, result);
+      const report = await readFile(paths.reportPath, "utf8");
+
+      expect(paths.comparisonPath).not.toBeNull();
+      expect(report).toBe(formatBenchmarkMarkdownReport(result));
+      expect(report).toContain("## Difficulty Breakdown");
+      expect(report).toContain("## Planner Comparison");
+      expect(report).toContain("controlled test site");
+      expect(report).toContain("universal website-testing accuracy");
+    } finally {
+      await unlink(join(directory, "summary.json"));
+      await unlink(join(directory, "runs.json"));
+      await unlink(join(directory, "comparison.json"));
+      await unlink(join(directory, "benchmark-report.md"));
+      await rmdir(directory);
+    }
   });
 });
 
@@ -229,6 +370,7 @@ function scenario(overrides: Partial<BenchmarkScenario> = {}): BenchmarkScenario
     id: "clean",
     name: "Clean workflow",
     mode: "functional",
+    difficulty: "medium",
     startUrl: "http://benchmark.test/login",
     objective: "Verify a clean workflow",
     expectedOutcome: "The workflow passes.",
@@ -261,6 +403,9 @@ function run(overrides: Partial<BenchmarkRun> = {}): BenchmarkRun {
     scenarioName: "Clean workflow",
     repetition: 1,
     mode: "functional",
+    difficulty: "medium",
+    planner: "deterministic",
+    modelName: null,
     startedAt: "2026-08-26T08:00:00.000Z",
     classification: "PASS",
     expectedOutcomeMet: true,

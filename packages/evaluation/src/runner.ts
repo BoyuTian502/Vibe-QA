@@ -3,8 +3,11 @@ import { randomUUID } from "node:crypto";
 import { classifyBenchmarkRun } from "./classification.js";
 import { aggregateBenchmarkMetrics } from "./metrics.js";
 import type {
+  BenchmarkApplicationConfiguration,
   BenchmarkConfiguration,
+  BenchmarkDifficulty,
   BenchmarkMode,
+  BenchmarkPlanner,
   BenchmarkRun,
   BenchmarkRunOptions,
   BenchmarkScenario,
@@ -15,11 +18,23 @@ import type {
 export interface BenchmarkRunnerOptions {
   now?: () => Date;
   idFactory?: () => string;
+  gitCommitSha?: string | null;
+  plannerModels?: Partial<Record<BenchmarkPlanner, string>>;
+  benchmarkApplication?: BenchmarkApplicationConfiguration;
 }
+
+const DEFAULT_BENCHMARK_APPLICATION: BenchmarkApplicationConfiguration = {
+  name: "benchmark-saas-workspace",
+  version: "0.0.0",
+  configuration: "five-seeded-bugs"
+};
 
 export class BenchmarkRunner {
   private readonly now: () => Date;
   private readonly idFactory: () => string;
+  private readonly gitCommitSha: string | null;
+  private readonly plannerModels: Partial<Record<BenchmarkPlanner, string>>;
+  private readonly benchmarkApplication: BenchmarkApplicationConfiguration;
 
   constructor(
     private readonly executor: BenchmarkScenarioExecutor,
@@ -27,6 +42,11 @@ export class BenchmarkRunner {
   ) {
     this.now = options.now ?? (() => new Date());
     this.idFactory = options.idFactory ?? randomUUID;
+    this.gitCommitSha = options.gitCommitSha ?? null;
+    this.plannerModels = { ...options.plannerModels };
+    this.benchmarkApplication = {
+      ...(options.benchmarkApplication ?? DEFAULT_BENCHMARK_APPLICATION)
+    };
   }
 
   async run(
@@ -37,6 +57,13 @@ export class BenchmarkRunner {
     if (!Number.isInteger(runsPerScenario) || runsPerScenario < 1) {
       throw new Error("Benchmark runs per scenario must be a positive integer.");
     }
+    const requestedPlanners: readonly BenchmarkPlanner[] = options.planners ?? [
+      "deterministic"
+    ];
+    const planners = unique(requestedPlanners);
+    if (planners.length === 0) {
+      throw new Error("Benchmark execution requires at least one planner.");
+    }
     const selectedScenarios = filterBenchmarkScenarios(scenarios, options);
     if (selectedScenarios.length === 0) {
       throw new Error("No benchmark scenarios matched the requested filters.");
@@ -45,58 +72,81 @@ export class BenchmarkRunner {
     const suiteId = this.idFactory();
     const generatedAt = this.now().toISOString();
     const runs: BenchmarkRun[] = [];
-    for (const scenario of selectedScenarios) {
-      for (let repetition = 1; repetition <= runsPerScenario; repetition += 1) {
-        const startedAt = this.now().toISOString();
-        try {
-          const execution = await this.executor.execute(scenario, repetition);
-          runs.push({
-            id: `${scenario.id}-${repetition}-${this.idFactory()}`,
-            scenarioId: scenario.id,
-            scenarioName: scenario.name,
-            repetition,
-            mode: scenario.mode,
-            startedAt,
-            classification: classifyBenchmarkRun(scenario, execution),
-            expectedOutcomeMet: execution.expectedOutcomeMet,
-            expectedBugId: scenario.expectedBugId,
-            detectedBugIds: [...execution.detectedBugIds],
-            reportedBugCount: execution.reportedBugCount,
-            infrastructureError: execution.infrastructureError,
-            stepCount: execution.stepCount,
-            durationMs: execution.durationMs,
-            safetyEvents: { ...execution.safetyEvents },
-            exploration: execution.exploration ? { ...execution.exploration } : null
-          });
-        } catch (error) {
-          runs.push({
-            id: `${scenario.id}-${repetition}-${this.idFactory()}`,
-            scenarioId: scenario.id,
-            scenarioName: scenario.name,
-            repetition,
-            mode: scenario.mode,
-            startedAt,
-            classification: "AGENT_ERROR",
-            expectedOutcomeMet: false,
-            expectedBugId: scenario.expectedBugId,
-            detectedBugIds: [],
-            reportedBugCount: 0,
-            infrastructureError: safeErrorMessage(error),
-            stepCount: 0,
-            durationMs: 0,
-            safetyEvents: { allowed: 0, blocked: 0, approvalRequired: 0 },
-            exploration: null
-          });
+    for (const planner of planners) {
+      for (const scenario of selectedScenarios) {
+        for (let repetition = 1; repetition <= runsPerScenario; repetition += 1) {
+          const startedAt = this.now().toISOString();
+          try {
+            const execution = await this.executor.execute(
+              scenario,
+              repetition,
+              planner
+            );
+            runs.push({
+              id: `${planner}-${scenario.id}-${repetition}-${this.idFactory()}`,
+              scenarioId: scenario.id,
+              scenarioName: scenario.name,
+              repetition,
+              mode: scenario.mode,
+              difficulty: scenario.difficulty,
+              planner,
+              modelName: this.plannerModels[planner] ?? null,
+              startedAt,
+              classification: classifyBenchmarkRun(scenario, execution),
+              expectedOutcomeMet: execution.expectedOutcomeMet,
+              expectedBugId: scenario.expectedBugId,
+              detectedBugIds: [...execution.detectedBugIds],
+              reportedBugCount: execution.reportedBugCount,
+              infrastructureError: execution.infrastructureError,
+              stepCount: execution.stepCount,
+              durationMs: execution.durationMs,
+              safetyEvents: { ...execution.safetyEvents },
+              exploration: execution.exploration ? { ...execution.exploration } : null
+            });
+          } catch (error) {
+            runs.push({
+              id: `${planner}-${scenario.id}-${repetition}-${this.idFactory()}`,
+              scenarioId: scenario.id,
+              scenarioName: scenario.name,
+              repetition,
+              mode: scenario.mode,
+              difficulty: scenario.difficulty,
+              planner,
+              modelName: this.plannerModels[planner] ?? null,
+              startedAt,
+              classification: "AGENT_ERROR",
+              expectedOutcomeMet: false,
+              expectedBugId: scenario.expectedBugId,
+              detectedBugIds: [],
+              reportedBugCount: 0,
+              infrastructureError: safeErrorMessage(error),
+              stepCount: 0,
+              durationMs: 0,
+              safetyEvents: { allowed: 0, blocked: 0, approvalRequired: 0 },
+              exploration: null
+            });
+          }
         }
       }
     }
 
     const configuration: BenchmarkConfiguration = {
       runsPerScenario,
+      scenarioIds: selectedScenarios.map((scenario) => scenario.id),
       scenarioFilter: [...(options.scenarioIds ?? [])],
       modeFilter: [...(options.modes ?? [])],
-      planner: "deterministic",
-      browserIsolation: "fresh-context-per-run"
+      difficultyFilter: [...(options.difficulties ?? [])],
+      planner: planners[0] ?? "deterministic",
+      planners,
+      plannerModels: Object.fromEntries(
+        planners.flatMap((planner) =>
+          this.plannerModels[planner] ? [[planner, this.plannerModels[planner]]] : []
+        )
+      ),
+      browserIsolation: "fresh-context-per-run",
+      gitCommitSha: this.gitCommitSha,
+      benchmarkApplication: { ...this.benchmarkApplication },
+      randomSeed: null
     };
     return {
       suiteId,
@@ -114,6 +164,7 @@ function copyScenario(scenario: BenchmarkScenario): BenchmarkScenario {
     id: scenario.id,
     name: scenario.name,
     mode: scenario.mode,
+    difficulty: scenario.difficulty,
     startUrl: scenario.startUrl,
     objective: scenario.objective,
     expectedOutcome: scenario.expectedOutcome,
@@ -126,14 +177,16 @@ function copyScenario(scenario: BenchmarkScenario): BenchmarkScenario {
 
 export function filterBenchmarkScenarios(
   scenarios: readonly BenchmarkScenario[],
-  options: Pick<BenchmarkRunOptions, "scenarioIds" | "modes">
+  options: Pick<BenchmarkRunOptions, "scenarioIds" | "modes" | "difficulties">
 ): BenchmarkScenario[] {
   const scenarioIds = new Set(options.scenarioIds ?? []);
   const modes = new Set<BenchmarkMode>(options.modes ?? []);
+  const difficulties = new Set<BenchmarkDifficulty>(options.difficulties ?? []);
   return scenarios.filter(
     (scenario) =>
       (scenarioIds.size === 0 || scenarioIds.has(scenario.id)) &&
-      (modes.size === 0 || modes.has(scenario.mode))
+      (modes.size === 0 || modes.has(scenario.mode)) &&
+      (difficulties.size === 0 || difficulties.has(scenario.difficulty))
   );
 }
 
@@ -143,4 +196,8 @@ function safeErrorMessage(error: unknown): string {
     /((?:password|token|secret|api[_-]?key|authorization)\s*[:=]\s*)\S+/gi,
     "$1[REDACTED]"
   );
+}
+
+function unique<T>(values: readonly T[]): T[] {
+  return [...new Set(values)];
 }
