@@ -1,0 +1,29 @@
+{
+  "name": "@vibeqa/benchmark-runner",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "vibeqa-benchmark": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@vibeqa/agent-core": "0.0.0",
+    "@vibeqa/benchmark-app": "0.0.0",
+    "@vibeqa/browser-playwright": "0.0.0",
+    "@vibeqa/evaluation": "0.0.0",
+    "@vibeqa/explorer": "0.0.0",
+    "@vibeqa/test-engine": "0.0.0",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.15"
+  }
+}

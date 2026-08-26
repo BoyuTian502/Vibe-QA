@@ -188,11 +188,49 @@ The strict TypeScript monorepo contains focused unit and browser integration tes
 for the benchmark, browser controllers, agent runtime, safety gate, planner, test
 engine, runner, explorer, and demo composition.
 
+## Evaluation Benchmark
+
+Individual test reports show what happened in one run. The evaluation benchmark
+repeats a representative suite against the seeded benchmark application to
+measure how reliably Vibe-QA completes expected workflows and detects known
+website defects.
+
+Run the deterministic baseline with five repetitions per scenario:
+
+```bash
+npm run benchmark:qa
+```
+
+Change the repetition count or select a smaller slice:
+
+```bash
+npm run benchmark:qa -- --runs 10
+npm run benchmark:qa -- --scenario bug-widget-crash
+npm run benchmark:qa -- --mode exploratory
+```
+
+The report includes task success rate, seeded bug detection rate, false positive
+rate, repeated-run stability, safety events, mode-level performance, and
+descriptive statistics for step count and execution duration. A website test can
+have status `failed` because it exposed a defect while the benchmark result is
+`EXPECTED_BUG_FOUND`, which counts as a successful evaluation outcome.
+
+The baseline suite covers successful and rejected authentication, authenticated
+dashboard access, normal settings navigation, the seeded fragile-widget defect,
+and deterministic exploratory coverage.
+
+Each repetition resets the benchmark data and launches a fresh isolated browser
+context. The default suite uses deterministic scenarios and requires no external
+LLM or paid API. Compact `summary.json` and `runs.json` artifacts are written to
+`run-output/benchmark/<timestamp>/`; credentials, raw traces, and screenshots are
+not included.
+
 ## Repository Map
 
 ```text
 apps/
   benchmark-app/       Resettable SaaS-style target with five seeded bugs
+  benchmark-runner/    Deterministic repeated evaluation CLI
   cli/                 CLI and visible technical demo
   dashboard/           Read-only report and evidence dashboard
   worker/              Worker application boundary
@@ -200,6 +238,7 @@ packages/
   agent-core/          Agent loop, memory, evaluator, trace, approvals
   browser-tools/       Browser session abstraction and observations
   browser-playwright/  Playwright BrowserController implementation
+  evaluation/          Benchmark classification, metrics, runner, and reporter
   explorer/            Page-state coverage and candidate exploration
   llm/                 Provider-neutral clients and test doubles
   planner/             Browser-action and TestCase planners
@@ -212,6 +251,8 @@ docs/                  Product, architecture, agent, scope, and demo documents
 
 ## Future Improvements
 
+- Add a lightweight benchmark history view that reads the generated evaluation
+  summaries without coupling the dashboard to benchmark execution.
 - Persist website memory across runs and compare page-state changes over time.
 - Prioritize regression testing around changed or historically fragile workflows.
 - Expand semantic hypothesis generation while retaining deterministic baselines.

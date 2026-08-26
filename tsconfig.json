@@ -5,6 +5,9 @@
       "path": "./apps/benchmark-app"
     },
     {
+      "path": "./apps/benchmark-runner"
+    },
+    {
       "path": "./apps/cli"
     },
     {
@@ -21,6 +24,9 @@
     },
     {
       "path": "./packages/explorer"
+    },
+    {
+      "path": "./packages/evaluation"
     },
     {
       "path": "./packages/llm"

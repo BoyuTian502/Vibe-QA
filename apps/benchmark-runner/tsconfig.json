@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../benchmark-app" },
+    { "path": "../../packages/agent-core" },
+    { "path": "../../packages/browser-playwright" },
+    { "path": "../../packages/evaluation" },
+    { "path": "../../packages/explorer" },
+    { "path": "../../packages/test-engine" }
+  ]
+}
