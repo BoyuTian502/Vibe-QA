@@ -4,14 +4,19 @@ import { join } from "node:path";
 import { startBenchmarkServer, type BenchmarkServer } from "@vibeqa/benchmark-app";
 import {
   BenchmarkRunner,
+  GeneralizationRunner,
   formatBenchmarkSummary,
+  formatGeneralizationSummary,
   writeBenchmarkReport,
+  writeGeneralizationReport,
   type BenchmarkPlanner
 } from "@vibeqa/evaluation";
-import { OllamaClient } from "@vibeqa/llm";
+import { OllamaClient, type LLMClient } from "@vibeqa/llm";
 
 import { parseBenchmarkCliOptions } from "./cli-options.js";
 import { BenchmarkPlaywrightExecutor } from "./executor.js";
+import { GeneralizationPlaywrightExecutor } from "./generalization-executor.js";
+import { createGeneralizationScenarios } from "./generalization-scenarios.js";
 import {
   DeterministicBenchmarkPlannerStrategy,
   OllamaBenchmarkPlannerStrategy,
@@ -27,7 +32,10 @@ async function main(): Promise<void> {
   let benchmark: BenchmarkServer | null = null;
   try {
     const options = parseBenchmarkCliOptions();
-    const strategies = createPlannerStrategies(options.planners);
+    const ollamaClient = options.planners.includes("ollama")
+      ? new OllamaClient(OLLAMA_MODEL)
+      : null;
+    const strategies = createPlannerStrategies(options.planners, ollamaClient);
     for (const planner of options.planners) {
       await requiredStrategy(strategies, planner).verifyAvailability();
     }
@@ -35,6 +43,16 @@ async function main(): Promise<void> {
     benchmark = await startBenchmarkServer({ port: 0, host: "127.0.0.1" });
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const outputDirectory = join(process.cwd(), "run-output", "benchmark", timestamp);
+    if (options.suite === "generalization-v3") {
+      await runGeneralizationBenchmark({
+        benchmark,
+        outputDirectory,
+        options,
+        ollamaClient
+      });
+      return;
+    }
+
     const scenarios = createBenchmarkScenarios(benchmark.url);
     let completedRuns = 0;
     const selectedCount = scenarios.filter(
@@ -98,19 +116,79 @@ async function main(): Promise<void> {
 }
 
 function createPlannerStrategies(
-  planners: readonly BenchmarkPlanner[]
+  planners: readonly BenchmarkPlanner[],
+  ollamaClient: LLMClient | null
 ): Partial<Record<BenchmarkPlanner, BenchmarkPlannerStrategy>> {
   const strategies: Partial<Record<BenchmarkPlanner, BenchmarkPlannerStrategy>> = {};
   if (planners.includes("deterministic")) {
     strategies.deterministic = new DeterministicBenchmarkPlannerStrategy();
   }
   if (planners.includes("ollama")) {
-    strategies.ollama = new OllamaBenchmarkPlannerStrategy(
-      new OllamaClient(OLLAMA_MODEL),
-      OLLAMA_MODEL
-    );
+    if (!ollamaClient) {
+      throw new Error("The Ollama planner client is not configured.");
+    }
+    strategies.ollama = new OllamaBenchmarkPlannerStrategy(ollamaClient, OLLAMA_MODEL);
   }
   return strategies;
+}
+
+async function runGeneralizationBenchmark(input: {
+  benchmark: BenchmarkServer;
+  outputDirectory: string;
+  options: ReturnType<typeof parseBenchmarkCliOptions>;
+  ollamaClient: LLMClient | null;
+}): Promise<void> {
+  const scenarios = createGeneralizationScenarios(input.benchmark.url);
+  const selectedCount = scenarios.filter(
+    (scenario) =>
+      (!input.options.scenario || scenario.id === input.options.scenario) &&
+      (!input.options.difficulty || scenario.difficulty === input.options.difficulty)
+  ).length;
+  const totalRuns = selectedCount * input.options.runs * input.options.planners.length;
+  let completedRuns = 0;
+
+  console.log("--------------------------------------------------");
+  console.log("Vibe-QA Generalization & Autonomous Discovery Benchmark");
+  console.log("--------------------------------------------------\n");
+  console.log(`Benchmark website: ${input.benchmark.url}`);
+  console.log(`Suite: generalization-v3`);
+  console.log(`Runs per scenario: ${input.options.runs}`);
+  console.log(`Selected scenarios: ${selectedCount}`);
+  console.log(`Planner strategies: ${input.options.planners.join(", ")}\n`);
+
+  const executor = new GeneralizationPlaywrightExecutor({
+    benchmark: input.benchmark,
+    ollamaClient: input.ollamaClient ?? undefined,
+    onRunStart: (scenario, repetition, planner) => {
+      completedRuns += 1;
+      console.log(
+        `[${completedRuns}/${totalRuns}] ${scenario.name} [${scenario.difficulty}] (${planner}, run ${repetition}/${input.options.runs})`
+      );
+    }
+  });
+  const result = await new GeneralizationRunner(executor, {
+    gitCommitSha: readGitCommitSha(),
+    plannerModels: input.options.planners.includes("ollama")
+      ? { ollama: OLLAMA_MODEL }
+      : {},
+    benchmarkApplication: {
+      name: "benchmark-saas-workspace",
+      version: "0.0.0",
+      configuration: "five-seeded-bugs-plus-generalization-states"
+    }
+  }).run(scenarios, {
+    runsPerScenario: input.options.runs,
+    scenarioIds: input.options.scenario ? [input.options.scenario] : undefined,
+    difficulties: input.options.difficulty ? [input.options.difficulty] : undefined,
+    planners: input.options.planners
+  });
+  const paths = await writeGeneralizationReport(input.outputDirectory, result);
+  console.log(`\n${formatGeneralizationSummary(result)}`);
+  console.log(`Artifacts: ${paths.outputDirectory}`);
+  console.log(`Markdown report: ${paths.reportPath}`);
+  if (paths.comparisonPath) {
+    console.log(`Planner comparison: ${paths.comparisonPath}`);
+  }
 }
 
 function requiredStrategy(

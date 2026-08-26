@@ -188,7 +188,7 @@ The strict TypeScript monorepo contains focused unit and browser integration tes
 for the benchmark, browser controllers, agent runtime, safety gate, planner, test
 engine, runner, explorer, and demo composition.
 
-## Evaluation Benchmark
+## Evaluation Benchmark V2
 
 Individual test reports show what happened in one run. The evaluation benchmark
 repeats a representative suite against the seeded benchmark application to
@@ -225,14 +225,44 @@ LLM or paid API. Compact `summary.json`, `runs.json`, and `benchmark-report.md`
 artifacts are written to `run-output/benchmark/<timestamp>/`; credentials, raw
 traces, and screenshots are not included.
 
+## Generalization Benchmark V3
+
+V3 asks a different question: what value does a planner add when the exact
+browser path and bug location are not provided? It runs blind hidden-bug hunts,
+ambiguous account and project goals, same-URL dashboard state changes, and
+recovery scenarios with realistic safe distractors.
+
+```bash
+npm run benchmark:qa -- --suite generalization --planner deterministic --runs 2
+npm run benchmark:qa -- --suite generalization --planner ollama --runs 2
+npm run benchmark:qa -- --suite generalization --compare deterministic,ollama --runs 3
+```
+
+The deterministic V3 baseline uses the existing Explorer candidate scoring. It
+does not receive a hidden scripted path. Ollama uses the existing Agent and
+`LLMClient` loop to select actions from live observations. Both planners receive
+only the public goal, start URL, and step budget. Seeded bug IDs, evaluator
+selectors, expected action sequences, credentials, and internal benchmark
+metadata remain evaluator-only.
+
+V3 reports autonomous discovery, ambiguous-goal completion, useful new states
+per action, detours, state revisits, recovery, time to discovery, coverage before
+discovery, and success within 5, 10, and maximum steps. Its results remain
+separate from V2 controlled-workflow reliability so the two success rates are
+not conflated. Artifacts use the same
+`run-output/benchmark/<timestamp>/` location and include
+`suite: "generalization-v3"` metadata.
+
 ## Benchmark Comparison
 
-The deterministic strategy is the default reproducible baseline. An optional
-Ollama strategy uses the existing `LLMClient` abstraction and
-`qwen2.5-coder:7b` to order known safe scenario steps. Typed credential values
-are inserted only during local execution and are not sent to the model. Ollama
-must be running locally with the model installed; Vibe-QA reports a clear error
-instead of silently falling back when it is unavailable.
+The deterministic strategy is the default reproducible baseline. In V2, an
+optional Ollama strategy uses the existing `LLMClient` abstraction and
+`qwen2.5-coder:7b` to order known safe scenario steps. In V3, the same local
+model selects browser actions autonomously from the public goal and current
+observation. Typed credential values are inserted only during local setup and
+are not sent to the model. Ollama must be running locally with the model
+installed; Vibe-QA reports a clear error instead of silently falling back when
+it is unavailable.
 
 The default Ollama endpoint uses the IPv4 loopback address to avoid Windows and
 Node resolving `localhost` to an unsupported IPv6 listener. Override it when

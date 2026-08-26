@@ -13,6 +13,50 @@ export {
 export type { BenchmarkReportPaths } from "./reporter.js";
 export { BenchmarkRunner, filterBenchmarkScenarios } from "./runner.js";
 export type { BenchmarkRunnerOptions } from "./runner.js";
+export {
+  aggregateGeneralizationMetrics,
+  calculateDetourRate,
+  calculateExplorationEfficiency,
+  calculateRecoverySuccessRate,
+  calculateStateRevisitRate
+} from "./generalization-metrics.js";
+export {
+  formatGeneralizationMarkdownReport,
+  formatGeneralizationSummary,
+  writeGeneralizationReport
+} from "./generalization-reporter.js";
+export type { GeneralizationReportPaths } from "./generalization-reporter.js";
+export {
+  GeneralizationRunner,
+  classifyGeneralizationRun,
+  filterGeneralizationScenarios,
+  toGeneralizationPlannerInput,
+  toScenarioSummary
+} from "./generalization-runner.js";
+export type { GeneralizationRunnerOptions } from "./generalization-runner.js";
+export type {
+  GeneralizationActionRecord,
+  GeneralizationBugSignal,
+  GeneralizationClassification,
+  GeneralizationConfiguration,
+  GeneralizationEvaluatorOnly,
+  GeneralizationExecution,
+  GeneralizationGoalState,
+  GeneralizationMetrics,
+  GeneralizationObservedState,
+  GeneralizationPerformanceMetrics,
+  GeneralizationPlannerInput,
+  GeneralizationPlannerMetrics,
+  GeneralizationRun,
+  GeneralizationRunOptions,
+  GeneralizationScenario,
+  GeneralizationScenarioCategory,
+  GeneralizationScenarioExecutor,
+  GeneralizationScenarioMetrics,
+  GeneralizationScenarioSummary,
+  GeneralizationSuiteResult,
+  StepBudgetMetrics
+} from "./generalization-types.js";
 export type {
   BenchmarkClassification,
   BenchmarkConfiguration,

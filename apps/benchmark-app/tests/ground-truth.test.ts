@@ -94,6 +94,18 @@ describe("benchmark SaaS app seeded bugs", () => {
 });
 
 describe("benchmark SaaS app required workflows", () => {
+  it("provides deterministic same-URL dashboard views and safe distractors", async () => {
+    const dashboard = await fetch(`${app.url}/dashboard`);
+    const html = await dashboard.text();
+
+    expect(html).toContain('id="view-activity"');
+    expect(html).toContain('id="view-notifications"');
+    expect(html).toContain('id="view-help"');
+    expect(html).toContain("Recent workspace activity");
+    expect(html).toContain("Refresh dashboard insights");
+    expect(html).not.toContain(">Run fragile widget<");
+  });
+
   it("supports edit, delete, settings, navigation, and resettable local data", async () => {
     const edited = await jsonRequest<ProjectPayload>(
       `${app.url}/api/projects/proj-alpha`,

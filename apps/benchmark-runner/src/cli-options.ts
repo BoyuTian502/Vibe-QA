@@ -6,6 +6,7 @@ import {
 import { Command, InvalidArgumentError } from "commander";
 
 export interface BenchmarkCliOptions {
+  suite: "controlled-v2" | "generalization-v3";
   runs: number;
   scenario?: string;
   mode?: BenchmarkMode;
@@ -14,6 +15,7 @@ export interface BenchmarkCliOptions {
 }
 
 interface RawCliOptions {
+  suite: "controlled-v2" | "generalization-v3";
   runs: number;
   scenario?: string;
   mode?: BenchmarkMode;
@@ -29,6 +31,12 @@ export function parseBenchmarkCliOptions(
     .name("vibeqa-benchmark")
     .description("Run the comparative Vibe-QA evaluation benchmark suite")
     .exitOverride()
+    .option(
+      "--suite <suite>",
+      "use controlled or generalization benchmark suite",
+      parseSuite,
+      "controlled-v2"
+    )
     .option("--runs <count>", "runs per scenario", parsePositiveInteger, 5)
     .option("--scenario <id>", "run one scenario by ID")
     .option(
@@ -56,12 +64,23 @@ export function parseBenchmarkCliOptions(
   program.parse([...argv], { from: "user" });
   const options = program.opts<RawCliOptions>();
   return {
+    suite: options.suite,
     runs: options.runs,
     scenario: options.scenario,
     mode: options.mode,
     difficulty: options.difficulty,
     planners: options.compare ?? [options.planner]
   };
+}
+
+function parseSuite(value: string): "controlled-v2" | "generalization-v3" {
+  if (value === "controlled" || value === "controlled-v2" || value === "v2") {
+    return "controlled-v2";
+  }
+  if (value === "generalization" || value === "generalization-v3" || value === "v3") {
+    return "generalization-v3";
+  }
+  throw new InvalidArgumentError(`unknown benchmark suite: ${value}`);
 }
 
 function parsePositiveInteger(value: string): number {

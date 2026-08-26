@@ -16,7 +16,7 @@ export function renderLoginPage(): string {
             <label>Password
               <input name="password" type="password" autocomplete="current-password" value="password123" />
             </label>
-            <button type="submit">Sign in</button>
+            <button id="login-submit" type="submit">Sign in</button>
             <p id="login-message" role="status"></p>
           </form>
         </section>
@@ -78,7 +78,20 @@ export function renderDashboardPage(projects: ProjectRecord[]): string {
           <h1>Acme Growth Workspace</h1>
           <p class="muted">Plan launches, track customer work, and keep release tasks moving.</p>
         </div>
-        <button id="trigger-client-error" type="button">Run fragile widget</button>
+        <button id="trigger-client-error" type="button">Refresh dashboard insights</button>
+      </section>
+
+      <section class="panel dashboard-views" aria-label="Workspace information">
+        <div class="row" role="tablist" aria-label="Dashboard views">
+          <button id="view-overview" type="button" role="tab" aria-selected="true">Overview</button>
+          <button id="view-activity" type="button" role="tab" aria-selected="false">Activity</button>
+          <button id="view-notifications" type="button" role="tab" aria-selected="false">Notifications</button>
+          <button id="view-help" type="button">Help</button>
+        </div>
+        <div id="dashboard-view" aria-live="polite">
+          <h2>Workspace overview</h2>
+          <p>Two active customer workflows are ready for review.</p>
+        </div>
       </section>
 
       <section class="layout-grid">
@@ -250,6 +263,35 @@ function renderPage(input: { title: string; body: string; script: string }): str
 function dashboardScript(): string {
   return `
     const list = document.querySelector("#project-list");
+    const dashboardView = document.querySelector("#dashboard-view");
+    const dashboardTabs = ["overview", "activity", "notifications"];
+
+    const dashboardViews = {
+      overview: ["Workspace overview", "Two active customer workflows are ready for review."],
+      activity: ["Recent workspace activity", "Launch checklist was reviewed by Morgan Lee."],
+      notifications: ["Workspace notifications", "No urgent notifications require attention."],
+      help: ["Workspace help", "Visit project details or settings to review a workflow."]
+    };
+
+    function showDashboardView(view) {
+      const content = dashboardViews[view];
+      dashboardView.innerHTML = "<h2>" + content[0] + "</h2><p>" + content[1] + "</p>";
+      for (const tab of dashboardTabs) {
+        document.querySelector("#view-" + tab).setAttribute(
+          "aria-selected",
+          String(tab === view)
+        );
+      }
+    }
+
+    for (const view of dashboardTabs) {
+      document.querySelector("#view-" + view).addEventListener("click", () => {
+        showDashboardView(view);
+      });
+    }
+    document.querySelector("#view-help").addEventListener("click", () => {
+      showDashboardView("help");
+    });
 
     document.querySelector("#create-project-form").addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -472,6 +514,12 @@ function styles(): string {
       grid-template-columns: minmax(280px, 360px) 1fr;
     }
     .panel, .project-card { padding: 18px; }
+    .dashboard-views { gap: 12px; }
+    .dashboard-views [role="tab"][aria-selected="false"],
+    .dashboard-views #view-help {
+      background: white;
+      color: #1f5fbf;
+    }
     .project-list { display: grid; gap: 14px; }
     .project-card {
       display: grid;

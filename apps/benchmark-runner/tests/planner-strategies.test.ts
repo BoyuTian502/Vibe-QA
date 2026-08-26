@@ -11,9 +11,21 @@ import { createBenchmarkScenarios } from "../src/scenarios.js";
 describe("benchmark planner configuration", () => {
   it("keeps deterministic planning as the CLI default", () => {
     expect(parseBenchmarkCliOptions(["--runs", "2"])).toMatchObject({
+      suite: "controlled-v2",
       runs: 2,
       planners: ["deterministic"]
     });
+  });
+
+  it("selects V3 explicitly without changing the V2 default", () => {
+    expect(
+      parseBenchmarkCliOptions(["--suite", "generalization", "--runs", "2"])
+    ).toMatchObject({
+      suite: "generalization-v3",
+      runs: 2,
+      planners: ["deterministic"]
+    });
+    expect(parseBenchmarkCliOptions([]).suite).toBe("controlled-v2");
   });
 
   it("parses planner, mode, difficulty, scenario, and comparison filters", () => {
