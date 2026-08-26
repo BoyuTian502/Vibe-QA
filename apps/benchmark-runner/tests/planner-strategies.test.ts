@@ -1,5 +1,5 @@
-import type { LLMClient } from "@vibeqa/llm";
-import { describe, expect, it } from "vitest";
+import { OllamaClient, type LLMClient } from "@vibeqa/llm";
+import { describe, expect, it, vi } from "vitest";
 
 import { parseBenchmarkCliOptions } from "../src/cli-options.js";
 import {
@@ -72,7 +72,8 @@ describe("benchmark planner configuration", () => {
   });
 
   it("fails clearly when Ollama is unavailable", async () => {
-    const client: LLMClient = {
+    const client: LLMClient & { baseUrl: string } = {
+      baseUrl: "http://127.0.0.1:11434",
       generate: async () => {
         throw new Error("fetch failed");
       }
@@ -80,9 +81,29 @@ describe("benchmark planner configuration", () => {
 
     await expect(
       new OllamaBenchmarkPlannerStrategy(client).verifyAvailability()
-    ).rejects.toThrow(
-      "Ollama planner is unavailable. Start Ollama at http://localhost:11434"
+    ).rejects.toThrow("Ollama planner unavailable at http://127.0.0.1:11434");
+  });
+
+  it("checks model availability through the configured Ollama endpoint", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ response: '{"ready":true}' }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      })
     );
+    const client = new OllamaClient({
+      baseUrl: "http://ollama.internal.test:11434/",
+      fetch: fetchMock
+    });
+
+    await new OllamaBenchmarkPlannerStrategy(client).verifyAvailability();
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "http://ollama.internal.test:11434/api/generate"
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      model: "qwen2.5-coder:7b"
+    });
   });
 });
 

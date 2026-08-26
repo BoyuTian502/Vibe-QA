@@ -234,6 +234,14 @@ are inserted only during local execution and are not sent to the model. Ollama
 must be running locally with the model installed; Vibe-QA reports a clear error
 instead of silently falling back when it is unavailable.
 
+The default Ollama endpoint uses the IPv4 loopback address to avoid Windows and
+Node resolving `localhost` to an unsupported IPv6 listener. Override it when
+Ollama is hosted elsewhere:
+
+```ini
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+```
+
 ```bash
 npm run benchmark:qa -- --planner deterministic --runs 10
 npm run benchmark:qa -- --planner ollama --runs 5

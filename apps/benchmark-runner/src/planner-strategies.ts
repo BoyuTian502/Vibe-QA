@@ -34,11 +34,14 @@ export class DeterministicBenchmarkPlannerStrategy implements BenchmarkPlannerSt
 
 export class OllamaBenchmarkPlannerStrategy implements BenchmarkPlannerStrategy {
   readonly name = "ollama" as const;
+  private readonly endpoint: string;
 
   constructor(
     private readonly client: LLMClient,
     readonly modelName = "qwen2.5-coder:7b"
-  ) {}
+  ) {
+    this.endpoint = configuredEndpoint(client);
+  }
 
   async verifyAvailability(): Promise<void> {
     try {
@@ -48,7 +51,7 @@ export class OllamaBenchmarkPlannerStrategy implements BenchmarkPlannerStrategy 
     } catch (error) {
       const cause = error instanceof Error ? error.message : "unknown connection error";
       throw new Error(
-        `Ollama planner is unavailable. Start Ollama at http://localhost:11434 and install ${this.modelName}. Cause: ${cause}`
+        `Ollama planner unavailable at ${this.endpoint}. Ensure Ollama is running and install ${this.modelName}. Cause: ${cause}`
       );
     }
   }
@@ -118,6 +121,13 @@ export class OllamaBenchmarkPlannerStrategy implements BenchmarkPlannerStrategy 
     }
     return record.goal.trim();
   }
+}
+
+function configuredEndpoint(client: LLMClient): string {
+  const endpoint = (client as LLMClient & { baseUrl?: unknown }).baseUrl;
+  return typeof endpoint === "string" && endpoint.length > 0
+    ? endpoint
+    : "the configured endpoint";
 }
 
 function safeActionSummary(action: BrowserAction): Record<string, unknown> {

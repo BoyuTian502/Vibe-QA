@@ -1,5 +1,6 @@
 export { MockLLMClient } from "./mock-client.js";
-export { OllamaClient } from "./ollama-client.js";
+export { DEFAULT_OLLAMA_BASE_URL, OllamaClient } from "./ollama-client.js";
+export type { OllamaClientOptions } from "./ollama-client.js";
 export {
   OpenAICompatibleHTTPError,
   OpenAICompatibleLLMClient,
