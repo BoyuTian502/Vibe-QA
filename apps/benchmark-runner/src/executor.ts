@@ -6,6 +6,7 @@ import type {
   BenchmarkPlanner,
   BenchmarkScenario,
   BenchmarkScenarioExecutor,
+  PlannerRoutingMetadata,
   SafetyEventCounts
 } from "@vibeqa/evaluation";
 import { ExplorationSession, type ExplorationResult } from "@vibeqa/explorer";
@@ -61,6 +62,7 @@ export class BenchmarkPlaywrightExecutor implements BenchmarkScenarioExecutor {
     this.options.benchmark.reset();
     const startedAt = this.now();
     let browser: ClosableBrowserController | null = null;
+    let routing: PlannerRoutingMetadata | null = null;
 
     try {
       const strategy = this.plannerStrategies[planner];
@@ -68,6 +70,14 @@ export class BenchmarkPlaywrightExecutor implements BenchmarkScenarioExecutor {
         throw new Error(`No benchmark planner strategy is configured for ${planner}.`);
       }
       const prepared = await strategy.prepare(executable);
+      routing = prepared.routing;
+      if (prepared.infrastructureError) {
+        return failedBenchmarkExecution(
+          prepared.infrastructureError,
+          Math.max(0, this.now() - startedAt),
+          routing
+        );
+      }
       browser = await this.launchBrowser();
       const benchmarkBrowser = new CompactEvidenceBrowserController(browser);
       if (scenario.mode === "exploratory") {
@@ -82,7 +92,8 @@ export class BenchmarkPlaywrightExecutor implements BenchmarkScenarioExecutor {
         return explorationExecution(
           scenario,
           result,
-          Math.max(0, this.now() - startedAt)
+          Math.max(0, this.now() - startedAt),
+          routing
         );
       }
 
@@ -94,7 +105,21 @@ export class BenchmarkPlaywrightExecutor implements BenchmarkScenarioExecutor {
         testCase: prepared.testCase,
         screenshotDirectory: "run-output/benchmark-discarded-evidence"
       }).run();
-      return testExecution(executable, result, Math.max(0, this.now() - startedAt));
+      return testExecution(
+        executable,
+        result,
+        Math.max(0, this.now() - startedAt),
+        routing
+      );
+    } catch (error) {
+      if (routing) {
+        return failedBenchmarkExecution(
+          safeErrorMessage(error),
+          Math.max(0, this.now() - startedAt),
+          routing
+        );
+      }
+      throw error;
     } finally {
       await browser?.close();
     }
@@ -148,7 +173,8 @@ class CompactEvidenceBrowserController implements BrowserController {
 function testExecution(
   scenario: ExecutableBenchmarkScenario,
   result: TestResult,
-  durationMs: number
+  durationMs: number,
+  routing: PlannerRoutingMetadata | null
 ): BenchmarkExecution {
   const detectedBugIds = extractBugIds(result);
   if (
@@ -174,14 +200,16 @@ function testExecution(
     stepCount: result.executedSteps.length,
     durationMs,
     safetyEvents: countSafetyEvents([result.trace]),
-    exploration: null
+    exploration: null,
+    routing
   };
 }
 
 function explorationExecution(
   scenario: BenchmarkScenario,
   result: ExplorationResult,
-  durationMs: number
+  durationMs: number,
+  routing: PlannerRoutingMetadata | null
 ): BenchmarkExecution {
   const detectedBugIds = extractBugIds(result);
   const criteria = scenario.successCriteria;
@@ -225,8 +253,35 @@ function explorationExecution(
       candidateActionsAttempted: result.state.executedActions.length,
       coverageScore,
       terminationReason: result.stopReason
-    }
+    },
+    routing
   };
+}
+
+function failedBenchmarkExecution(
+  error: string,
+  durationMs: number,
+  routing: PlannerRoutingMetadata | null
+): BenchmarkExecution {
+  return {
+    expectedOutcomeMet: false,
+    detectedBugIds: [],
+    reportedBugCount: 0,
+    infrastructureError: safeErrorMessage(error),
+    stepCount: 0,
+    durationMs,
+    safetyEvents: { allowed: 0, blocked: 0, approvalRequired: 0 },
+    exploration: null,
+    routing
+  };
+}
+
+function safeErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(
+    /((?:password|token|secret|api[_-]?key|authorization)\s*[:=]\s*)\S+/gi,
+    "$1[REDACTED]"
+  );
 }
 
 function coverageRatio(actual: number, target: number): number {

@@ -11,6 +11,11 @@ import { describe, expect, it } from "vitest";
 
 import { GeneralizationPlaywrightExecutor } from "../src/generalization-executor.js";
 import { createGeneralizationScenarios } from "../src/generalization-scenarios.js";
+import {
+  DeterministicBenchmarkPlannerStrategy,
+  HybridBenchmarkPlannerStrategy,
+  OllamaBenchmarkPlannerStrategy
+} from "../src/planner-strategies.js";
 
 describe("generalization benchmark runner", () => {
   it("runs V3 without an exact scripted browser path", async () => {
@@ -186,6 +191,70 @@ describe("generalization benchmark runner", () => {
       "ollama"
     ]);
   });
+
+  it("routes an ambiguous Hybrid scenario through deterministic execution", async () => {
+    const benchmark = await startBenchmarkServer({ port: 0 });
+    const unavailableClient: LLMClient = {
+      generate: async () => {
+        throw new Error("Ollama should not be checked for this task.");
+      }
+    };
+    const hybrid = new HybridBenchmarkPlannerStrategy(
+      new DeterministicBenchmarkPlannerStrategy(),
+      new OllamaBenchmarkPlannerStrategy(unavailableClient)
+    );
+    try {
+      const scenario = requiredScenario(benchmark.url, "ambiguous-settings");
+      const execution = await new GeneralizationPlaywrightExecutor({
+        benchmark,
+        ollamaClient: unavailableClient,
+        hybridStrategy: hybrid
+      }).execute(scenario, 1, "hybrid");
+
+      expect(execution.routing).toMatchObject({
+        selectedPlanner: "deterministic",
+        executedPlanner: "deterministic",
+        routingRule: "ambiguous-semantic-default",
+        matchedRecommendation: true
+      });
+      expect(execution.infrastructureError).toBeNull();
+    } finally {
+      await benchmark.close();
+    }
+  }, 30_000);
+
+  it("records unavailable Ollama selection without benchmark fallback", async () => {
+    const benchmark = await startBenchmarkServer({ port: 0 });
+    const unavailableClient: LLMClient = {
+      generate: async () => {
+        throw new Error("fetch failed");
+      }
+    };
+    const hybrid = new HybridBenchmarkPlannerStrategy(
+      new DeterministicBenchmarkPlannerStrategy(),
+      new OllamaBenchmarkPlannerStrategy(unavailableClient)
+    );
+    try {
+      const scenario = requiredScenario(benchmark.url, "discover-dashboard-failure");
+      const execution = await new GeneralizationPlaywrightExecutor({
+        benchmark,
+        ollamaClient: unavailableClient,
+        hybridStrategy: hybrid
+      }).execute(scenario, 1, "hybrid");
+
+      expect(execution.routing).toMatchObject({
+        selectedPlanner: "ollama",
+        executedPlanner: null,
+        fallback: false,
+        matchedRecommendation: true
+      });
+      expect(execution.infrastructureError).toContain("Ollama planner unavailable");
+      expect(JSON.stringify(execution.routing)).not.toContain("BUG-BENCH");
+      expect(JSON.stringify(execution.routing)).not.toContain("password123");
+    } finally {
+      await benchmark.close();
+    }
+  }, 30_000);
 });
 
 class RecordingClient implements LLMClient {

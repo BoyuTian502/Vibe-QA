@@ -155,7 +155,8 @@ export function toScenarioSummary(
     plannerGoal: scenario.plannerGoal,
     hiddenExpectationSummary: scenario.hiddenExpectationSummary,
     maxSteps: scenario.maxSteps,
-    credentialsRequirement: scenario.credentialsRequirement
+    credentialsRequirement: scenario.credentialsRequirement,
+    routingHints: { ...scenario.routingHints }
   };
 }
 
@@ -280,7 +281,8 @@ function failedExecution(error: unknown): GeneralizationExecution {
     uniqueStatesBeforeDiscovery: 0,
     uniqueElementsBeforeDiscovery: 0,
     approvalRequired: false,
-    safetyBlocked: false
+    safetyBlocked: false,
+    routing: null
   };
 }
 

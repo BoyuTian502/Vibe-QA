@@ -294,6 +294,41 @@ npm run benchmark:qa -- --planner ollama --mode exploratory --runs 5
 npm run benchmark:qa -- --compare deterministic,ollama --runs 5
 ```
 
+## Hybrid Planner
+
+Hybrid Planner V1 is an explainable task router over the existing deterministic
+and Ollama strategies. It is not an LLM router and does not receive benchmark
+bug IDs, hidden selectors, evaluator paths, credentials, or secrets.
+
+The initial rules reflect the measured V3 specialization: deterministic is
+roughly five times faster and performs better on explicit or ambiguous
+controlled goals, while `qwen2.5-coder:7b` performs better on hidden discovery,
+recovery, exploration efficiency, detours, and state revisits. Hybrid therefore
+routes regression and known functional workflows to deterministic execution;
+explicit exploration, hidden-issue discovery, and pathless recovery go to
+Ollama. Ambiguous non-exploratory tasks and unknown cases use the conservative
+deterministic default.
+
+```bash
+npm run benchmark:qa -- --planner hybrid --runs 3
+npm run benchmark:qa -- --suite generalization --planner hybrid --runs 3
+npm run benchmark:qa -- --suite generalization --compare deterministic,ollama,hybrid --runs 3
+```
+
+The benchmark default remains deterministic. Benchmark Hybrid mode does not
+silently fall back when Ollama is unavailable: the selected planner, executed
+planner, routing rule, reason, availability failure, and fallback status remain
+visible in run metadata. This prevents a deterministic fallback from being
+counted as an Ollama execution.
+
+Reports that include Hybrid add a separate **Benchmark V4 - Hybrid Routing
+Evaluation** section with routing distribution, routing-accuracy proxy,
+fallback and availability counts, rule usage, Hybrid performance, and measured
+tradeoff interpretation. V2 controlled reliability and V3 generalization
+metrics remain separate. The routing-accuracy proxy measures agreement with
+evaluator-owned category recommendations, not whether a planner was empirically
+optimal on every run; those recommendations are never provided to the router.
+
 Scenarios are labeled by meaningful execution demands:
 
 - `easy`: short direct workflows with obvious controls.

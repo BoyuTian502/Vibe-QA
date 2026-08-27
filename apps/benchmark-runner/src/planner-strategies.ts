@@ -1,16 +1,28 @@
 import type { LLMClient } from "@vibeqa/llm";
+import {
+  HybridTaskRouter,
+  type HybridTaskMetadata,
+  type RoutedPlanner
+} from "@vibeqa/planner";
 import type { BrowserAction } from "@vibeqa/schemas";
 import type { TestCase, TestStep } from "@vibeqa/test-engine";
+import type {
+  BenchmarkPlanner,
+  ExecutionPlanner,
+  PlannerRoutingMetadata
+} from "@vibeqa/evaluation";
 
 import type { ExecutableBenchmarkScenario } from "./scenarios.js";
 
 export interface PreparedBenchmarkScenario {
   testCase: TestCase | null;
   explorationGoal: string;
+  routing: PlannerRoutingMetadata | null;
+  infrastructureError: string | null;
 }
 
 export interface BenchmarkPlannerStrategy {
-  readonly name: "deterministic" | "ollama";
+  readonly name: BenchmarkPlanner;
   readonly modelName: string | null;
   verifyAvailability(): Promise<void>;
   prepare(scenario: ExecutableBenchmarkScenario): Promise<PreparedBenchmarkScenario>;
@@ -27,7 +39,9 @@ export class DeterministicBenchmarkPlannerStrategy implements BenchmarkPlannerSt
   ): Promise<PreparedBenchmarkScenario> {
     return {
       testCase: scenario.testCase ? structuredClone(scenario.testCase) : null,
-      explorationGoal: scenario.objective
+      explorationGoal: scenario.objective,
+      routing: null,
+      infrastructureError: null
     };
   }
 }
@@ -35,6 +49,7 @@ export class DeterministicBenchmarkPlannerStrategy implements BenchmarkPlannerSt
 export class OllamaBenchmarkPlannerStrategy implements BenchmarkPlannerStrategy {
   readonly name = "ollama" as const;
   private readonly endpoint: string;
+  private availabilityCheck: Promise<void> | null = null;
 
   constructor(
     private readonly client: LLMClient,
@@ -44,6 +59,11 @@ export class OllamaBenchmarkPlannerStrategy implements BenchmarkPlannerStrategy 
   }
 
   async verifyAvailability(): Promise<void> {
+    this.availabilityCheck ??= this.checkAvailability();
+    return await this.availabilityCheck;
+  }
+
+  private async checkAvailability(): Promise<void> {
     try {
       await this.client.generate(
         'Return only this JSON object to confirm readiness: {"ready":true}'
@@ -62,7 +82,9 @@ export class OllamaBenchmarkPlannerStrategy implements BenchmarkPlannerStrategy 
     if (!scenario.testCase) {
       return {
         testCase: null,
-        explorationGoal: await this.planExplorationGoal(scenario)
+        explorationGoal: await this.planExplorationGoal(scenario),
+        routing: null,
+        infrastructureError: null
       };
     }
 
@@ -97,7 +119,9 @@ export class OllamaBenchmarkPlannerStrategy implements BenchmarkPlannerStrategy 
         startUrl: testCase.startUrl,
         steps: stepIds.map((id) => structuredClone(requiredStep(byId, id)))
       },
-      explorationGoal: scenario.objective
+      explorationGoal: scenario.objective,
+      routing: null,
+      infrastructureError: null
     };
   }
 
@@ -121,6 +145,158 @@ export class OllamaBenchmarkPlannerStrategy implements BenchmarkPlannerStrategy 
     }
     return record.goal.trim();
   }
+}
+
+export interface HybridPlannerSelection {
+  selectedPlanner: RoutedPlanner;
+  executedPlanner: ExecutionPlanner | null;
+  routing: PlannerRoutingMetadata;
+  infrastructureError: string | null;
+}
+
+export interface HybridBenchmarkPlannerStrategyOptions {
+  allowDeterministicFallback?: boolean;
+  router?: HybridTaskRouter;
+}
+
+export class HybridBenchmarkPlannerStrategy implements BenchmarkPlannerStrategy {
+  readonly name = "hybrid" as const;
+  readonly modelName = null;
+  private readonly allowDeterministicFallback: boolean;
+  private readonly router: HybridTaskRouter;
+
+  constructor(
+    private readonly deterministic: DeterministicBenchmarkPlannerStrategy,
+    private readonly ollama: OllamaBenchmarkPlannerStrategy,
+    options: HybridBenchmarkPlannerStrategyOptions = {}
+  ) {
+    this.allowDeterministicFallback = options.allowDeterministicFallback ?? false;
+    this.router = options.router ?? new HybridTaskRouter();
+  }
+
+  async verifyAvailability(): Promise<void> {}
+
+  async prepare(
+    scenario: ExecutableBenchmarkScenario
+  ): Promise<PreparedBenchmarkScenario> {
+    const selection = await this.select(
+      benchmarkTaskMetadata(scenario),
+      recommendedPlannerForControlledScenario(scenario)
+    );
+    if (!selection.executedPlanner) {
+      return {
+        testCase: null,
+        explorationGoal: scenario.objective,
+        routing: selection.routing,
+        infrastructureError: selection.infrastructureError
+      };
+    }
+    const delegate =
+      selection.executedPlanner === "ollama" ? this.ollama : this.deterministic;
+    const prepared = await delegate.prepare(scenario);
+    return {
+      ...prepared,
+      routing: selection.routing,
+      infrastructureError: null
+    };
+  }
+
+  async select(
+    task: HybridTaskMetadata,
+    recommendedPlanner: ExecutionPlanner | null
+  ): Promise<HybridPlannerSelection> {
+    const decision = this.router.route(task);
+    if (decision.planner === "deterministic") {
+      return selection(decision, "deterministic", recommendedPlanner);
+    }
+
+    try {
+      await this.ollama.verifyAvailability();
+      return selection(decision, "ollama", recommendedPlanner);
+    } catch (error) {
+      if (this.allowDeterministicFallback) {
+        return selection(
+          decision,
+          "deterministic",
+          recommendedPlanner,
+          true,
+          "ollama-unavailable"
+        );
+      }
+      const cause = error instanceof Error ? error.message : "unknown error";
+      return {
+        selectedPlanner: decision.planner,
+        executedPlanner: null,
+        routing: routingMetadata(decision, null, recommendedPlanner, false, null),
+        infrastructureError: cause
+      };
+    }
+  }
+}
+
+function benchmarkTaskMetadata(
+  scenario: ExecutableBenchmarkScenario
+): HybridTaskMetadata {
+  return {
+    mode: scenario.mode,
+    objective: scenario.objective,
+    hasExpectedBehavior: scenario.expectedOutcome.trim().length > 0,
+    exactWorkflowKnown: scenario.testCase !== null,
+    explicitlyExploratory: scenario.mode === "exploratory",
+    hiddenIssueDiscoveryRequested: false,
+    recoveryRequired: false,
+    semanticGoalAmbiguous: false,
+    maxSteps: scenario.maxSteps,
+    authenticationRequired: scenario.credentialsRequirement !== "none"
+  };
+}
+
+function recommendedPlannerForControlledScenario(
+  scenario: ExecutableBenchmarkScenario
+): ExecutionPlanner {
+  return scenario.mode === "exploratory" ? "ollama" : "deterministic";
+}
+
+function selection(
+  decision: ReturnType<HybridTaskRouter["route"]>,
+  executedPlanner: ExecutionPlanner,
+  recommendedPlanner: ExecutionPlanner | null,
+  fallback = false,
+  fallbackReason: "ollama-unavailable" | null = null
+): HybridPlannerSelection {
+  return {
+    selectedPlanner: decision.planner,
+    executedPlanner,
+    routing: routingMetadata(
+      decision,
+      executedPlanner,
+      recommendedPlanner,
+      fallback,
+      fallbackReason
+    ),
+    infrastructureError: null
+  };
+}
+
+function routingMetadata(
+  decision: ReturnType<HybridTaskRouter["route"]>,
+  executedPlanner: ExecutionPlanner | null,
+  recommendedPlanner: ExecutionPlanner | null,
+  fallback: boolean,
+  fallbackReason: "ollama-unavailable" | null
+): PlannerRoutingMetadata {
+  return {
+    requestedStrategy: "hybrid",
+    selectedPlanner: decision.planner,
+    executedPlanner,
+    routingRule: decision.ruleId,
+    routingReason: decision.reason,
+    fallback,
+    fallbackReason,
+    recommendedPlanner,
+    matchedRecommendation:
+      recommendedPlanner === null ? null : decision.planner === recommendedPlanner
+  };
 }
 
 function configuredEndpoint(client: LLMClient): string {

@@ -43,7 +43,8 @@ export async function writeBenchmarkReport(
       writeJson(comparisonPath, {
         suiteId: result.suiteId,
         generatedAt: result.generatedAt,
-        planners: result.metrics.plannerPerformance
+        planners: result.metrics.plannerPerformance,
+        hybridRouting: result.metrics.hybridRouting
       })
     );
   }
@@ -85,6 +86,7 @@ export function formatBenchmarkSummary(result: BenchmarkSuiteResult): string {
     `Approval Required: ${metrics.safetyEvents.approvalRequired}`,
     "",
     formatPlannerComparison(metrics.plannerPerformance),
+    ...(metrics.hybridRouting ? ["", formatHybridPlainSummary(result)] : []),
     "",
     "--------------------------------------------------",
     "Difficulty Breakdown",
@@ -143,6 +145,8 @@ export function formatBenchmarkMarkdownReport(result: BenchmarkSuiteResult): str
     "",
     `Generated: ${result.generatedAt}`,
     "",
+    "## Benchmark V2 - Controlled Workflow Reliability",
+    "",
     "## Configuration",
     "",
     `- Planners: ${result.configuration.planners.join(", ")}`,
@@ -197,6 +201,20 @@ export function formatBenchmarkMarkdownReport(result: BenchmarkSuiteResult): str
       "Planner",
       metrics.plannerPerformance.map((item) => [plannerLabel(item), item])
     ),
+    ...(metrics.hybridRouting
+      ? [
+          "",
+          "## Benchmark V4 - Hybrid Routing Evaluation",
+          "",
+          'Research question: "Can a rule-based hybrid router preserve deterministic efficiency on controlled tasks while retaining LLM advantages on autonomous discovery and recovery tasks?"',
+          "",
+          hybridRoutingMarkdown(result),
+          "",
+          "### Measured Interpretation",
+          "",
+          ...controlledHybridInterpretation(result).map((line) => `- ${line}`)
+        ]
+      : []),
     "",
     "## Limitations",
     "",
@@ -207,6 +225,103 @@ export function formatBenchmarkMarkdownReport(result: BenchmarkSuiteResult): str
     "- The constrained Ollama strategy orders known safe steps; exploratory candidate ranking remains deterministic.",
     ""
   ].join("\n");
+}
+
+function formatHybridPlainSummary(result: BenchmarkSuiteResult): string {
+  const routing = result.metrics.hybridRouting;
+  if (!routing) {
+    return "";
+  }
+  return [
+    "--------------------------------------------------",
+    "Benchmark V4 - Hybrid Routing Evaluation",
+    "--------------------------------------------------",
+    "",
+    `Selected deterministic: ${percentage(routing.selectedPlannerDistribution.deterministic)}`,
+    `Selected Ollama: ${percentage(routing.selectedPlannerDistribution.ollama)}`,
+    `Routing accuracy proxy: ${percentage(routing.routingAccuracyRate)} (${routing.routingAccuracyMatches}/${routing.routingAccuracyAttempts})`,
+    `Fallbacks: ${routing.fallbackCount}`,
+    `Unavailable executions: ${routing.unavailableExecutionCount}`
+  ].join("\n");
+}
+
+function hybridRoutingMarkdown(result: BenchmarkSuiteResult): string {
+  const routing = result.metrics.hybridRouting;
+  if (!routing) {
+    return "Hybrid routing was not requested for this benchmark.";
+  }
+  const hybrid = result.metrics.plannerPerformance.find(
+    (planner) => planner.planner === "hybrid"
+  );
+  return [
+    "### Hybrid Routing Summary",
+    "",
+    `- Hybrid executions: ${routing.totalHybridRuns}`,
+    `- Selected deterministic: ${percentage(routing.selectedPlannerDistribution.deterministic)} (${routing.selectedPlannerCounts.deterministic})`,
+    `- Selected Ollama: ${percentage(routing.selectedPlannerDistribution.ollama)} (${routing.selectedPlannerCounts.ollama})`,
+    `- Executed deterministic: ${routing.executedPlannerCounts.deterministic}`,
+    `- Executed Ollama: ${routing.executedPlannerCounts.ollama}`,
+    `- Routing accuracy proxy: ${percentage(routing.routingAccuracyRate)} (${routing.routingAccuracyMatches}/${routing.routingAccuracyAttempts})`,
+    "- Routing accuracy proxy means agreement with evaluator-owned task-category recommendations, not proof that the selected planner was optimal. Recommendations are never passed to the router.",
+    `- Fallbacks: ${routing.fallbackCount}`,
+    `- Ollama-unavailable fallbacks: ${routing.ollamaUnavailableFallbackCount}`,
+    `- Unavailable selected-planner executions: ${routing.unavailableExecutionCount}`,
+    "",
+    "### Routing Rules Used",
+    "",
+    ...Object.entries(routing.routingRuleCounts).map(
+      ([rule, count]) => `- ${rule}: ${count}`
+    ),
+    "",
+    "### Routing Reasons",
+    "",
+    ...Object.entries(routing.routingReasonCounts).map(
+      ([reason, count]) => `- ${reason}: ${count}`
+    ),
+    "",
+    "### Hybrid Performance",
+    "",
+    hybrid
+      ? [
+          `- Controlled task success: ${percentage(hybrid.taskSuccessRate)}`,
+          `- Seeded bug detection: ${bugDetectionValue(hybrid)}`,
+          `- Average duration: ${seconds(hybrid.averageDurationMs)}`,
+          `- Stability: ${percentage(hybrid.repeatedRunStability)}`
+        ].join("\n")
+      : "- No Hybrid performance sample is available."
+  ].join("\n");
+}
+
+function controlledHybridInterpretation(result: BenchmarkSuiteResult): string[] {
+  const deterministic = result.metrics.plannerPerformance.find(
+    (planner) => planner.planner === "deterministic"
+  );
+  const ollama = result.metrics.plannerPerformance.find(
+    (planner) => planner.planner === "ollama"
+  );
+  const hybrid = result.metrics.plannerPerformance.find(
+    (planner) => planner.planner === "hybrid"
+  );
+  if (!hybrid) {
+    return ["No Hybrid performance sample is available."];
+  }
+  const findings = [
+    deterministic
+      ? `Controlled success is ${percentage(hybrid.taskSuccessRate)} for Hybrid versus ${percentage(deterministic.taskSuccessRate)} for deterministic.`
+      : `Hybrid controlled success is ${percentage(hybrid.taskSuccessRate)}.`,
+    deterministic
+      ? `Hybrid average duration is ${durationRatio(hybrid.averageDurationMs, deterministic.averageDurationMs)} of deterministic.`
+      : `Hybrid average duration is ${seconds(hybrid.averageDurationMs)}.`,
+    ollama
+      ? `Hybrid average duration is ${durationRatio(hybrid.averageDurationMs, ollama.averageDurationMs)} of Ollama.`
+      : "No pure Ollama duration sample is present for comparison.",
+    `Hybrid stability is ${percentage(hybrid.repeatedRunStability)}; no stability improvement is claimed unless the measured value exceeds the alternatives.`
+  ];
+  return findings;
+}
+
+function durationRatio(value: number, baseline: number): string {
+  return baseline <= 0 ? "N/A" : `${(value / baseline).toFixed(2)}x`;
 }
 
 function markdownPerformanceTable(metrics: BenchmarkPerformanceMetrics): string {

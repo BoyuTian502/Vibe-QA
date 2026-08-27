@@ -1,4 +1,5 @@
 import { isSuccessfulClassification } from "./classification.js";
+import { aggregateHybridRoutingMetrics } from "./hybrid-metrics.js";
 import type {
   BenchmarkClassification,
   BenchmarkMetrics,
@@ -45,7 +46,8 @@ export function aggregateBenchmarkMetrics(
     scenarioResults: aggregateScenarioResults(runs),
     modePerformance: aggregateModePerformance(runs),
     difficultyPerformance: aggregateDifficultyPerformance(runs),
-    plannerPerformance: aggregatePlannerPerformance(runs)
+    plannerPerformance: aggregatePlannerPerformance(runs),
+    hybridRouting: aggregateHybridRoutingMetrics(runs)
   };
 }
 

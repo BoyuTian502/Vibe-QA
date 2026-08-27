@@ -54,6 +54,7 @@ export async function writeGeneralizationReport(
         sample: sampleMetadata(result),
         planners: result.metrics.plannerPerformance,
         scenariosByPlanner: result.metrics.scenarioPlannerPerformance,
+        hybridRouting: result.metrics.hybridRouting,
         interpretation: generalizationInterpretation(result)
       })
     );
@@ -88,6 +89,14 @@ export function formatGeneralizationSummary(result: GeneralizationSuiteResult): 
     `Average / Median Duration: ${seconds(metrics.averageDurationMs)} / ${seconds(metrics.medianDurationMs)}`,
     `Time to Discovery (mean / median): ${decimal(metrics.timeToDiscovery.mean)} / ${decimal(metrics.timeToDiscovery.median)} steps`,
     `Success within 5 / 10 / max steps: ${percentage(metrics.stepBudgetSuccess.within5Steps)} / ${percentage(metrics.stepBudgetSuccess.within10Steps)} / ${percentage(metrics.stepBudgetSuccess.withinMaxSteps)}`,
+    ...(metrics.hybridRouting
+      ? [
+          "",
+          `Hybrid selected deterministic / Ollama: ${percentage(metrics.hybridRouting.selectedPlannerDistribution.deterministic)} / ${percentage(metrics.hybridRouting.selectedPlannerDistribution.ollama)}`,
+          `Hybrid routing accuracy proxy: ${percentage(metrics.hybridRouting.routingAccuracyRate)} (${metrics.hybridRouting.routingAccuracyMatches}/${metrics.hybridRouting.routingAccuracyAttempts})`,
+          `Hybrid fallbacks / unavailable: ${metrics.hybridRouting.fallbackCount} / ${metrics.hybridRouting.unavailableExecutionCount}`
+        ]
+      : []),
     ""
   ].join("\n");
 }
@@ -132,6 +141,20 @@ export function formatGeneralizationMarkdownReport(
     result.metrics.plannerPerformance.length > 1
       ? plannerComparisonTable(result.metrics.plannerPerformance)
       : "A planner comparison is generated when more than one planner is executed.",
+    ...(result.metrics.hybridRouting
+      ? [
+          "",
+          "### Benchmark V4 - Hybrid Routing Evaluation",
+          "",
+          'Research question: "Can a rule-based hybrid router preserve deterministic efficiency on controlled tasks while retaining LLM advantages on autonomous discovery and recovery tasks?"',
+          "",
+          generalizationHybridRoutingMarkdown(result),
+          "",
+          "#### Measured V4 Interpretation",
+          "",
+          ...generalizationHybridInterpretation(result).map((finding) => `- ${finding}`)
+        ]
+      : []),
     "",
     "### Per-Scenario Statistics",
     "",
@@ -197,6 +220,111 @@ export function formatGeneralizationMarkdownReport(
     "This is a deterministic local benchmark application with a fixed scenario set. It measures comparative behavior under controlled conditions, not universal website-testing accuracy. Confidence intervals quantify sampling uncertainty for this benchmark only. Planner results can vary with model version, model settings, host load, browser startup, and local hardware.",
     ""
   ].join("\n");
+}
+
+function generalizationHybridRoutingMarkdown(
+  result: GeneralizationSuiteResult
+): string {
+  const routing = result.metrics.hybridRouting;
+  if (!routing) {
+    return "Hybrid routing was not requested for this benchmark.";
+  }
+  const hybrid = result.metrics.plannerPerformance.find(
+    (planner) => planner.planner === "hybrid"
+  );
+  return [
+    "#### Hybrid Routing Summary",
+    "",
+    `- Hybrid executions: ${routing.totalHybridRuns}`,
+    `- Selected deterministic: ${percentage(routing.selectedPlannerDistribution.deterministic)} (${routing.selectedPlannerCounts.deterministic})`,
+    `- Selected Ollama: ${percentage(routing.selectedPlannerDistribution.ollama)} (${routing.selectedPlannerCounts.ollama})`,
+    `- Executed deterministic: ${routing.executedPlannerCounts.deterministic}`,
+    `- Executed Ollama: ${routing.executedPlannerCounts.ollama}`,
+    `- Routing accuracy proxy: ${percentage(routing.routingAccuracyRate)} (${routing.routingAccuracyMatches}/${routing.routingAccuracyAttempts})`,
+    "- Routing accuracy proxy means agreement with evaluator-owned task-category recommendations, not proof that the selected planner was optimal. Recommendations are never passed to the router.",
+    `- Fallbacks: ${routing.fallbackCount}`,
+    `- Ollama-unavailable fallbacks: ${routing.ollamaUnavailableFallbackCount}`,
+    `- Unavailable selected-planner executions: ${routing.unavailableExecutionCount}`,
+    "",
+    "#### Planner-Switch Rules",
+    "",
+    ...Object.entries(routing.routingRuleCounts).map(
+      ([rule, count]) => `- ${rule}: ${count}`
+    ),
+    "",
+    "#### Routing Reasons",
+    "",
+    ...Object.entries(routing.routingReasonCounts).map(
+      ([reason, count]) => `- ${reason}: ${count}`
+    ),
+    "",
+    "#### Hybrid Performance",
+    "",
+    hybrid
+      ? [
+          `- Hidden bug discovery: ${proportionValue(hybrid.confidenceIntervals.autonomousDiscovery)}`,
+          `- Ambiguous goal completion: ${proportionValue(hybrid.confidenceIntervals.goalCompletion)}`,
+          `- Recovery success: ${proportionValue(hybrid.confidenceIntervals.recoverySuccess)}`,
+          `- Exploration efficiency: ${decimal(hybrid.explorationEfficiency)}`,
+          `- Average duration: ${seconds(hybrid.averageDurationMs)}`,
+          `- Expected-outcome stability: ${proportionValue(hybrid.confidenceIntervals.expectedOutcome)}`
+        ].join("\n")
+      : "- No Hybrid performance sample is available."
+  ].join("\n");
+}
+
+function generalizationHybridInterpretation(
+  result: GeneralizationSuiteResult
+): string[] {
+  const deterministic = result.metrics.plannerPerformance.find(
+    (planner) => planner.planner === "deterministic"
+  );
+  const ollama = result.metrics.plannerPerformance.find(
+    (planner) => planner.planner === "ollama"
+  );
+  const hybrid = result.metrics.plannerPerformance.find(
+    (planner) => planner.planner === "hybrid"
+  );
+  const routing = result.metrics.hybridRouting;
+  if (!hybrid || !routing) {
+    return ["No Hybrid generalization sample is available."];
+  }
+
+  const findings = [
+    deterministic
+      ? `Hidden discovery is ${percentage(hybrid.autonomousDiscoveryRate)} for Hybrid versus ${percentage(deterministic.autonomousDiscoveryRate)} for deterministic.`
+      : `Hybrid hidden discovery is ${percentage(hybrid.autonomousDiscoveryRate)}.`,
+    deterministic
+      ? `Ambiguous goal completion is ${percentage(hybrid.goalCompletionRate)} for Hybrid versus ${percentage(deterministic.goalCompletionRate)} for deterministic.`
+      : `Hybrid ambiguous goal completion is ${percentage(hybrid.goalCompletionRate)}.`,
+    deterministic
+      ? `Recovery success is ${percentage(hybrid.recoverySuccessRate)} for Hybrid versus ${percentage(deterministic.recoverySuccessRate)} for deterministic.`
+      : `Hybrid recovery success is ${percentage(hybrid.recoverySuccessRate)}.`,
+    ollama
+      ? `Hybrid average duration is ${durationRatio(hybrid.averageDurationMs, ollama.averageDurationMs)} of pure Ollama.`
+      : "No pure Ollama duration sample is present for comparison.",
+    `Hybrid expected-outcome stability is ${percentage(expectedOutcomeRate(hybrid))}; no stability improvement is claimed unless the measured value exceeds the alternatives.`,
+    `Routing matched the evaluator recommendation in ${routing.routingAccuracyMatches}/${routing.routingAccuracyAttempts} Hybrid executions.`
+  ];
+
+  const checks = [
+    deterministic
+      ? hybrid.autonomousDiscoveryRate > deterministic.autonomousDiscoveryRate
+      : false,
+    deterministic
+      ? hybrid.recoverySuccessRate >= deterministic.recoverySuccessRate
+      : false,
+    ollama ? hybrid.averageDurationMs < ollama.averageDurationMs : false,
+    routing.routingAccuracyRate >= 0.95
+  ];
+  findings.push(
+    `Generalization tradeoff criteria satisfied: ${checks.filter(Boolean).length}/${checks.length}. This is not an overall success declaration and controlled-workflow evidence remains in the separate V2 report.`
+  );
+  return findings;
+}
+
+function durationRatio(value: number, baseline: number): string {
+  return baseline <= 0 ? "N/A" : `${(value / baseline).toFixed(2)}x`;
 }
 
 export function generalizationInterpretation(result: GeneralizationSuiteResult): {

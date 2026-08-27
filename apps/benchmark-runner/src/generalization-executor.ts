@@ -3,11 +3,13 @@ import type { BenchmarkServer } from "@vibeqa/benchmark-app";
 import { PlaywrightBrowserController } from "@vibeqa/browser-playwright";
 import {
   type BenchmarkPlanner,
+  type ExecutionPlanner,
   type GeneralizationActionRecord,
   type GeneralizationExecution,
   type GeneralizationObservedState,
   type GeneralizationScenario,
   type GeneralizationScenarioExecutor,
+  type PlannerRoutingMetadata,
   type SafetyEventCounts,
   toGeneralizationPlannerInput
 } from "@vibeqa/evaluation";
@@ -20,6 +22,7 @@ import {
   type ExplorationResult
 } from "@vibeqa/explorer";
 import type { LLMClient } from "@vibeqa/llm";
+import type { HybridTaskMetadata } from "@vibeqa/planner";
 import {
   DefaultActionSafetyPolicy,
   type ActionSafetyPolicy
@@ -31,6 +34,7 @@ import {
 } from "@vibeqa/schemas";
 
 import { benchmarkCredentials } from "./scenarios.js";
+import type { HybridBenchmarkPlannerStrategy } from "./planner-strategies.js";
 
 interface ClosableBrowserController extends BrowserController {
   close(): Promise<void>;
@@ -41,6 +45,7 @@ interface ClosableBrowserController extends BrowserController {
 export interface GeneralizationPlaywrightExecutorOptions {
   benchmark: BenchmarkServer;
   ollamaClient?: LLMClient;
+  hybridStrategy?: HybridBenchmarkPlannerStrategy;
   launchBrowser?: () => Promise<ClosableBrowserController>;
   safetyPolicy?: ActionSafetyPolicy;
   now?: () => number;
@@ -73,8 +78,31 @@ export class GeneralizationPlaywrightExecutor implements GeneralizationScenarioE
     this.options.benchmark.reset();
     const startedAt = this.now();
     let browser: ClosableBrowserController | null = null;
+    let routing: PlannerRoutingMetadata | null = null;
 
     try {
+      let executedPlanner: ExecutionPlanner;
+      if (planner === "hybrid") {
+        if (!this.options.hybridStrategy) {
+          throw new Error("The Hybrid generalization strategy is not configured.");
+        }
+        const selection = await this.options.hybridStrategy.select(
+          generalizationTaskMetadata(scenario),
+          scenario.evaluatorOnly.recommendedPlanner
+        );
+        routing = selection.routing;
+        if (!selection.executedPlanner) {
+          return failedGeneralizationExecution(
+            selection.infrastructureError ?? "The selected planner is unavailable.",
+            Math.max(0, this.now() - startedAt),
+            routing
+          );
+        }
+        executedPlanner = selection.executedPlanner;
+      } else {
+        executedPlanner = planner;
+      }
+
       browser = await this.launchBrowser();
       if (scenario.credentialsRequirement === "benchmark-account") {
         await authenticateBenchmark(browser, this.options.benchmark.url);
@@ -86,7 +114,7 @@ export class GeneralizationPlaywrightExecutor implements GeneralizationScenarioE
       ]);
 
       const plannerInput = toGeneralizationPlannerInput(scenario);
-      if (planner === "deterministic") {
+      if (executedPlanner === "deterministic") {
         const baselinePolicy = new DefaultActionSafetyPolicy();
         const result = await new ExplorationSession({
           browser: plannerBrowser,
@@ -114,7 +142,8 @@ export class GeneralizationPlaywrightExecutor implements GeneralizationScenarioE
         return evaluateExplorationResult(
           scenario,
           result,
-          Math.max(0, this.now() - startedAt)
+          Math.max(0, this.now() - startedAt),
+          routing
         );
       }
 
@@ -139,8 +168,18 @@ export class GeneralizationPlaywrightExecutor implements GeneralizationScenarioE
         agent.state.errors,
         agent.getPendingApproval() !== null,
         Math.max(0, this.now() - startedAt),
-        agentClient.totalGenerationDurationMs
+        agentClient.totalGenerationDurationMs,
+        routing
       );
+    } catch (error) {
+      if (routing) {
+        return failedGeneralizationExecution(
+          safePlannerError(error),
+          Math.max(0, this.now() - startedAt),
+          routing
+        );
+      }
+      throw error;
     } finally {
       await browser?.close();
     }
@@ -445,7 +484,8 @@ class RedactingBrowserController implements BrowserController {
 export function evaluateExplorationResult(
   scenario: GeneralizationScenario,
   result: ExplorationResult,
-  durationMs: number
+  durationMs: number,
+  routing: PlannerRoutingMetadata | null = null
 ): GeneralizationExecution {
   const nodes = new Map(
     result.state.observedPageStates.map((node) => [node.fingerprint, node] as const)
@@ -479,6 +519,7 @@ export function evaluateExplorationResult(
     actions,
     durationMs,
     plannerDurationMs: null,
+    routing,
     safetyEvents,
     infrastructureError:
       result.stopReason === "error"
@@ -495,7 +536,8 @@ export function evaluateAgentTrace(
   errors: readonly string[],
   approvalRequired: boolean,
   durationMs: number,
-  plannerDurationMs: number | null = null
+  plannerDurationMs: number | null = null,
+  routing: PlannerRoutingMetadata | null = null
 ): GeneralizationExecution {
   const observationSteps = trace.steps.filter(
     (step): step is typeof step & { observation: Observation } =>
@@ -541,6 +583,7 @@ export function evaluateAgentTrace(
     actions,
     durationMs,
     plannerDurationMs,
+    routing,
     safetyEvents,
     infrastructureError: infrastructureError ?? null,
     approvalRequired,
@@ -553,6 +596,7 @@ interface TrajectoryInput {
   actions: GeneralizationActionRecord[];
   durationMs: number;
   plannerDurationMs?: number | null;
+  routing?: PlannerRoutingMetadata | null;
   safetyEvents: SafetyEventCounts;
   infrastructureError: string | null;
   approvalRequired: boolean;
@@ -639,6 +683,7 @@ export function evaluateTrajectory(
     infrastructureError: input.infrastructureError,
     durationMs: input.durationMs,
     plannerDurationMs: input.plannerDurationMs ?? null,
+    routing: input.routing ?? null,
     safetyEvents: input.safetyEvents,
     observations: input.observations,
     actions: input.actions,
@@ -652,6 +697,41 @@ export function evaluateTrajectory(
     ).size,
     approvalRequired: input.approvalRequired,
     safetyBlocked: input.safetyBlocked
+  };
+}
+
+function generalizationTaskMetadata(
+  scenario: GeneralizationScenario
+): HybridTaskMetadata {
+  return {
+    ...scenario.routingHints,
+    objective: scenario.plannerGoal,
+    maxSteps: scenario.maxSteps,
+    authenticationRequired: scenario.credentialsRequirement !== "none"
+  };
+}
+
+function failedGeneralizationExecution(
+  error: string,
+  durationMs: number,
+  routing: PlannerRoutingMetadata
+): GeneralizationExecution {
+  return {
+    goalCompleted: false,
+    detectedBugIds: [],
+    infrastructureError: error,
+    durationMs,
+    plannerDurationMs: null,
+    safetyEvents: { allowed: 0, blocked: 0, approvalRequired: 0 },
+    observations: [],
+    actions: [],
+    discoveryStep: null,
+    completionStep: null,
+    uniqueStatesBeforeDiscovery: 0,
+    uniqueElementsBeforeDiscovery: 0,
+    approvalRequired: false,
+    safetyBlocked: false,
+    routing
   };
 }
 

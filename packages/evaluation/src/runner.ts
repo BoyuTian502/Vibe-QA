@@ -101,7 +101,8 @@ export class BenchmarkRunner {
               stepCount: execution.stepCount,
               durationMs: execution.durationMs,
               safetyEvents: { ...execution.safetyEvents },
-              exploration: execution.exploration ? { ...execution.exploration } : null
+              exploration: execution.exploration ? { ...execution.exploration } : null,
+              routing: execution.routing ? { ...execution.routing } : null
             });
           } catch (error) {
             runs.push({
@@ -123,7 +124,8 @@ export class BenchmarkRunner {
               stepCount: 0,
               durationMs: 0,
               safetyEvents: { allowed: 0, blocked: 0, approvalRequired: 0 },
-              exploration: null
+              exploration: null,
+              routing: null
             });
           }
         }

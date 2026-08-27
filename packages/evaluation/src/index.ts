@@ -12,6 +12,7 @@ export {
 } from "./reporter.js";
 export type { BenchmarkReportPaths } from "./reporter.js";
 export { BenchmarkRunner, filterBenchmarkScenarios } from "./runner.js";
+export { aggregateHybridRoutingMetrics } from "./hybrid-metrics.js";
 export type { BenchmarkRunnerOptions } from "./runner.js";
 export {
   aggregateGeneralizationMetrics,
@@ -53,6 +54,7 @@ export type {
   GeneralizationPlannerMetrics,
   GeneralizationRun,
   GeneralizationRunOptions,
+  GeneralizationRoutingHints,
   GeneralizationScenario,
   GeneralizationScenarioCategory,
   GeneralizationScenarioExecutor,
@@ -72,6 +74,7 @@ export type {
   BenchmarkMode,
   BenchmarkPerformanceMetrics,
   BenchmarkPlanner,
+  ExecutionPlanner,
   BenchmarkRun,
   BenchmarkRunOptions,
   BenchmarkScenario,
@@ -81,8 +84,10 @@ export type {
   DifficultyBenchmarkMetrics,
   DistributionStatistics,
   ExplorationBenchmarkDetails,
+  HybridRoutingMetrics,
   ModeBenchmarkMetrics,
   PlannerBenchmarkMetrics,
+  PlannerRoutingMetadata,
   SafetyEventCounts,
   ScenarioBenchmarkMetrics
 } from "./types.js";

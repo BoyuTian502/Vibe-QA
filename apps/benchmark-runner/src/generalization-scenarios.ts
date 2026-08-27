@@ -17,7 +17,9 @@ export function createGeneralizationScenarios(
         "Discover the seeded client-side dashboard failure without a prescribed control or path.",
       maxSteps: 10,
       credentialsRequirement: "benchmark-account",
+      routingHints: routingHints({ hiddenIssueDiscoveryRequested: true }),
       evaluatorOnly: {
+        recommendedPlanner: "ollama",
         expectedBugIds: ["BUG-BENCH-005"],
         bugSignals: [
           {
@@ -42,7 +44,9 @@ export function createGeneralizationScenarios(
         "Discover the seeded post-session private-content exposure without a prescribed navigation sequence.",
       maxSteps: 10,
       credentialsRequirement: "benchmark-account",
+      routingHints: routingHints({ hiddenIssueDiscoveryRequested: true }),
       evaluatorOnly: {
+        recommendedPlanner: "ollama",
         expectedBugIds: ["BUG-BENCH-002"],
         bugSignals: [
           {
@@ -72,7 +76,9 @@ export function createGeneralizationScenarios(
         "Reach the settings state and identify its workspace configuration content.",
       maxSteps: 6,
       credentialsRequirement: "benchmark-account",
+      routingHints: routingHints({ semanticGoalAmbiguous: true }),
       evaluatorOnly: {
+        recommendedPlanner: "deterministic",
         expectedBugIds: [],
         bugSignals: [],
         goalState: { urlPath: "/settings", textIncludes: "Workspace settings" },
@@ -92,7 +98,9 @@ export function createGeneralizationScenarios(
         "Reach a seeded project detail state without a prescribed project or selector.",
       maxSteps: 6,
       credentialsRequirement: "benchmark-account",
+      routingHints: routingHints({ semanticGoalAmbiguous: true }),
       evaluatorOnly: {
+        recommendedPlanner: "deterministic",
         expectedBugIds: [],
         bugSignals: [],
         goalState: { urlPath: "/projects/proj-alpha", textIncludes: "Project detail" },
@@ -112,7 +120,9 @@ export function createGeneralizationScenarios(
         "Distinguish a meaningful dashboard state transition that does not change the URL.",
       maxSteps: 8,
       credentialsRequirement: "benchmark-account",
+      routingHints: routingHints(),
       evaluatorOnly: {
+        recommendedPlanner: "deterministic",
         expectedBugIds: [],
         bugSignals: [],
         goalState: {
@@ -135,7 +145,9 @@ export function createGeneralizationScenarios(
         "Reach the launch workflow after any safe non-optimal interactions and avoid repeated failures.",
       maxSteps: 10,
       credentialsRequirement: "benchmark-account",
+      routingHints: routingHints({ recoveryRequired: true }),
       evaluatorOnly: {
+        recommendedPlanner: "ollama",
         expectedBugIds: [],
         bugSignals: [],
         goalState: {
@@ -147,4 +159,19 @@ export function createGeneralizationScenarios(
       }
     }
   ];
+}
+
+function routingHints(
+  overrides: Partial<GeneralizationScenario["routingHints"]> = {}
+): GeneralizationScenario["routingHints"] {
+  return {
+    mode: "functional",
+    hasExpectedBehavior: false,
+    exactWorkflowKnown: false,
+    explicitlyExploratory: false,
+    hiddenIssueDiscoveryRequested: false,
+    recoveryRequired: false,
+    semanticGoalAmbiguous: false,
+    ...overrides
+  };
 }

@@ -32,6 +32,8 @@ describe("generalization benchmark evaluation", () => {
     expect(plannerJson).not.toContain("hidden exact sequence");
     expect(scenarioJson).not.toContain("#hidden-target");
     expect(scenarioJson).not.toContain("hidden exact sequence");
+    expect(plannerJson).not.toContain("recommendedPlanner");
+    expect(scenarioJson).not.toContain("recommendedPlanner");
     expect(result.suite).toBe("generalization-v3");
   });
 
@@ -163,7 +165,17 @@ function scenario(): GeneralizationScenario {
     hiddenExpectationSummary: "Discover a seeded failure.",
     maxSteps: 10,
     credentialsRequirement: "benchmark-account",
+    routingHints: {
+      mode: "functional",
+      hasExpectedBehavior: false,
+      exactWorkflowKnown: false,
+      explicitlyExploratory: false,
+      hiddenIssueDiscoveryRequested: true,
+      recoveryRequired: false,
+      semanticGoalAmbiguous: false
+    },
     evaluatorOnly: {
+      recommendedPlanner: "ollama",
       expectedBugIds: ["BUG-BENCH-999"],
       bugSignals: [
         {

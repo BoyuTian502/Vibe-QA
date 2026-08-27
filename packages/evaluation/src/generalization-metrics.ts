@@ -1,4 +1,5 @@
 import { describeDistribution } from "./metrics.js";
+import { aggregateHybridRoutingMetrics } from "./hybrid-metrics.js";
 import type {
   GeneralizationMetrics,
   GeneralizationPerformanceMetrics,
@@ -51,7 +52,8 @@ export function aggregateGeneralizationMetrics(
         difficulty,
         ...aggregatePerformance(difficultyRuns)
       })
-    )
+    ),
+    hybridRouting: aggregateHybridRoutingMetrics(runs)
   };
 }
 

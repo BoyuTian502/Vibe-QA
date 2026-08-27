@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { parseBenchmarkCliOptions } from "../src/cli-options.js";
 import {
   DeterministicBenchmarkPlannerStrategy,
+  HybridBenchmarkPlannerStrategy,
   OllamaBenchmarkPlannerStrategy
 } from "../src/planner-strategies.js";
 import { createBenchmarkScenarios } from "../src/scenarios.js";
@@ -49,6 +50,12 @@ describe("benchmark planner configuration", () => {
     expect(
       parseBenchmarkCliOptions(["--compare", "deterministic,ollama"]).planners
     ).toEqual(["deterministic", "ollama"]);
+    expect(parseBenchmarkCliOptions(["--planner", "hybrid"]).planners).toEqual([
+      "hybrid"
+    ]);
+    expect(
+      parseBenchmarkCliOptions(["--compare", "deterministic,ollama,hybrid"]).planners
+    ).toEqual(["deterministic", "ollama", "hybrid"]);
   });
 
   it("preserves scenario difficulty metadata", () => {
@@ -115,6 +122,72 @@ describe("benchmark planner configuration", () => {
     );
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
       model: "qwen2.5-coder:7b"
+    });
+  });
+
+  it("records deterministic Hybrid routing for a known functional workflow", async () => {
+    const ollama = new OllamaBenchmarkPlannerStrategy(
+      new RecordingClient('{"ready":true}')
+    );
+    const strategy = new HybridBenchmarkPlannerStrategy(
+      new DeterministicBenchmarkPlannerStrategy(),
+      ollama
+    );
+
+    const prepared = await strategy.prepare(requiredScenario("login"));
+
+    expect(prepared.infrastructureError).toBeNull();
+    expect(prepared.routing).toMatchObject({
+      requestedStrategy: "hybrid",
+      selectedPlanner: "deterministic",
+      executedPlanner: "deterministic",
+      routingRule: "functional-known-workflow",
+      fallback: false,
+      matchedRecommendation: true
+    });
+  });
+
+  it("does not silently fall back when Ollama is unavailable in benchmark mode", async () => {
+    const unavailable = new OllamaBenchmarkPlannerStrategy({
+      generate: async () => {
+        throw new Error("fetch failed");
+      }
+    });
+    const strategy = new HybridBenchmarkPlannerStrategy(
+      new DeterministicBenchmarkPlannerStrategy(),
+      unavailable
+    );
+
+    const prepared = await strategy.prepare(requiredScenario("dashboard-exploration"));
+
+    expect(prepared.infrastructureError).toContain("Ollama planner unavailable");
+    expect(prepared.routing).toMatchObject({
+      selectedPlanner: "ollama",
+      executedPlanner: null,
+      fallback: false
+    });
+  });
+
+  it("records the opt-in deterministic fallback without relabeling it", async () => {
+    const unavailable = new OllamaBenchmarkPlannerStrategy({
+      generate: async () => {
+        throw new Error("fetch failed");
+      }
+    });
+    const strategy = new HybridBenchmarkPlannerStrategy(
+      new DeterministicBenchmarkPlannerStrategy(),
+      unavailable,
+      { allowDeterministicFallback: true }
+    );
+
+    const prepared = await strategy.prepare(requiredScenario("dashboard-exploration"));
+
+    expect(prepared.infrastructureError).toBeNull();
+    expect(prepared.routing).toMatchObject({
+      selectedPlanner: "ollama",
+      executedPlanner: "deterministic",
+      fallback: true,
+      fallbackReason: "ollama-unavailable"
     });
   });
 });

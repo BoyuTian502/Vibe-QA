@@ -5,6 +5,9 @@ import type {
   BenchmarkDifficulty,
   BenchmarkPlanner,
   DistributionStatistics,
+  ExecutionPlanner,
+  HybridRoutingMetrics,
+  PlannerRoutingMetadata,
   SafetyEventCounts
 } from "./types.js";
 
@@ -42,6 +45,17 @@ export interface GeneralizationEvaluatorOnly {
   goalState?: GeneralizationGoalState;
   hiddenTargetSelectors: string[];
   hiddenExpectedActions: string[];
+  recommendedPlanner: ExecutionPlanner;
+}
+
+export interface GeneralizationRoutingHints {
+  mode: "functional" | "exploratory" | "regression";
+  hasExpectedBehavior: boolean;
+  exactWorkflowKnown: boolean;
+  explicitlyExploratory: boolean;
+  hiddenIssueDiscoveryRequested: boolean;
+  recoveryRequired: boolean;
+  semanticGoalAmbiguous: boolean;
 }
 
 export interface GeneralizationScenario {
@@ -54,6 +68,7 @@ export interface GeneralizationScenario {
   hiddenExpectationSummary: string;
   maxSteps: number;
   credentialsRequirement: "none" | "benchmark-account";
+  routingHints: GeneralizationRoutingHints;
   evaluatorOnly: GeneralizationEvaluatorOnly;
 }
 
@@ -67,6 +82,7 @@ export interface GeneralizationScenarioSummary {
   hiddenExpectationSummary: string;
   maxSteps: number;
   credentialsRequirement: "none" | "benchmark-account";
+  routingHints: GeneralizationRoutingHints;
 }
 
 export interface GeneralizationPlannerInput {
@@ -106,6 +122,7 @@ export interface GeneralizationExecution {
   uniqueElementsBeforeDiscovery: number;
   approvalRequired: boolean;
   safetyBlocked: boolean;
+  routing?: PlannerRoutingMetadata | null;
 }
 
 export interface GeneralizationRun extends GeneralizationExecution {
@@ -204,6 +221,7 @@ export interface GeneralizationMetrics extends GeneralizationPerformanceMetrics 
   difficultyPerformance: Array<
     GeneralizationPerformanceMetrics & { difficulty: BenchmarkDifficulty }
   >;
+  hybridRouting: HybridRoutingMetrics | null;
 }
 
 export interface GeneralizationConfiguration {

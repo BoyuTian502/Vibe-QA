@@ -2,7 +2,36 @@ export type BenchmarkMode = "functional" | "exploratory" | "regression";
 
 export type BenchmarkDifficulty = "easy" | "medium" | "hard";
 
-export type BenchmarkPlanner = "deterministic" | "ollama";
+export type ExecutionPlanner = "deterministic" | "ollama";
+
+export type BenchmarkPlanner = ExecutionPlanner | "hybrid";
+
+export interface PlannerRoutingMetadata {
+  requestedStrategy: "hybrid";
+  selectedPlanner: ExecutionPlanner;
+  executedPlanner: ExecutionPlanner | null;
+  routingRule: string;
+  routingReason: string;
+  fallback: boolean;
+  fallbackReason: "ollama-unavailable" | null;
+  recommendedPlanner: ExecutionPlanner | null;
+  matchedRecommendation: boolean | null;
+}
+
+export interface HybridRoutingMetrics {
+  totalHybridRuns: number;
+  selectedPlannerCounts: Record<ExecutionPlanner, number>;
+  selectedPlannerDistribution: Record<ExecutionPlanner, number>;
+  executedPlannerCounts: Record<ExecutionPlanner, number>;
+  fallbackCount: number;
+  ollamaUnavailableFallbackCount: number;
+  unavailableExecutionCount: number;
+  routingAccuracyAttempts: number;
+  routingAccuracyMatches: number;
+  routingAccuracyRate: number;
+  routingRuleCounts: Record<string, number>;
+  routingReasonCounts: Record<string, number>;
+}
 
 export type BenchmarkClassification =
   | "PASS"
@@ -60,6 +89,7 @@ export interface BenchmarkExecution {
   durationMs: number;
   safetyEvents: SafetyEventCounts;
   exploration: ExplorationBenchmarkDetails | null;
+  routing?: PlannerRoutingMetadata | null;
 }
 
 export interface BenchmarkRun {
@@ -82,6 +112,7 @@ export interface BenchmarkRun {
   durationMs: number;
   safetyEvents: SafetyEventCounts;
   exploration: ExplorationBenchmarkDetails | null;
+  routing?: PlannerRoutingMetadata | null;
 }
 
 export interface DistributionStatistics {
@@ -144,6 +175,7 @@ export interface BenchmarkMetrics extends BenchmarkPerformanceMetrics {
   modePerformance: ModeBenchmarkMetrics[];
   difficultyPerformance: DifficultyBenchmarkMetrics[];
   plannerPerformance: PlannerBenchmarkMetrics[];
+  hybridRouting: HybridRoutingMetrics | null;
 }
 
 export interface BenchmarkApplicationConfiguration {

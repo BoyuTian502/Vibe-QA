@@ -19,6 +19,7 @@ import { GeneralizationPlaywrightExecutor } from "./generalization-executor.js";
 import { createGeneralizationScenarios } from "./generalization-scenarios.js";
 import {
   DeterministicBenchmarkPlannerStrategy,
+  HybridBenchmarkPlannerStrategy,
   OllamaBenchmarkPlannerStrategy,
   type BenchmarkPlannerStrategy
 } from "./planner-strategies.js";
@@ -32,9 +33,10 @@ async function main(): Promise<void> {
   let benchmark: BenchmarkServer | null = null;
   try {
     const options = parseBenchmarkCliOptions();
-    const ollamaClient = options.planners.includes("ollama")
-      ? new OllamaClient(OLLAMA_MODEL)
-      : null;
+    const ollamaClient =
+      options.planners.includes("ollama") || options.planners.includes("hybrid")
+        ? new OllamaClient(OLLAMA_MODEL)
+        : null;
     const strategies = createPlannerStrategies(options.planners, ollamaClient);
     for (const planner of options.planners) {
       await requiredStrategy(strategies, planner).verifyAvailability();
@@ -48,7 +50,8 @@ async function main(): Promise<void> {
         benchmark,
         outputDirectory,
         options,
-        ollamaClient
+        ollamaClient,
+        strategies
       });
       return;
     }
@@ -83,9 +86,7 @@ async function main(): Promise<void> {
     });
     const result = await new BenchmarkRunner(executor, {
       gitCommitSha: readGitCommitSha(),
-      plannerModels: options.planners.includes("ollama")
-        ? { ollama: OLLAMA_MODEL }
-        : {},
+      plannerModels: plannerModels(options.planners),
       benchmarkApplication: {
         name: "benchmark-saas-workspace",
         version: "0.0.0",
@@ -120,14 +121,21 @@ function createPlannerStrategies(
   ollamaClient: LLMClient | null
 ): Partial<Record<BenchmarkPlanner, BenchmarkPlannerStrategy>> {
   const strategies: Partial<Record<BenchmarkPlanner, BenchmarkPlannerStrategy>> = {};
-  if (planners.includes("deterministic")) {
-    strategies.deterministic = new DeterministicBenchmarkPlannerStrategy();
+  const deterministic = new DeterministicBenchmarkPlannerStrategy();
+  if (planners.includes("deterministic") || planners.includes("hybrid")) {
+    strategies.deterministic = deterministic;
   }
-  if (planners.includes("ollama")) {
+  if (planners.includes("ollama") || planners.includes("hybrid")) {
     if (!ollamaClient) {
       throw new Error("The Ollama planner client is not configured.");
     }
-    strategies.ollama = new OllamaBenchmarkPlannerStrategy(ollamaClient, OLLAMA_MODEL);
+    const ollama = new OllamaBenchmarkPlannerStrategy(ollamaClient, OLLAMA_MODEL);
+    strategies.ollama = ollama;
+    if (planners.includes("hybrid")) {
+      strategies.hybrid = new HybridBenchmarkPlannerStrategy(deterministic, ollama, {
+        allowDeterministicFallback: false
+      });
+    }
   }
   return strategies;
 }
@@ -137,6 +145,7 @@ async function runGeneralizationBenchmark(input: {
   outputDirectory: string;
   options: ReturnType<typeof parseBenchmarkCliOptions>;
   ollamaClient: LLMClient | null;
+  strategies: Partial<Record<BenchmarkPlanner, BenchmarkPlannerStrategy>>;
 }): Promise<void> {
   const scenarios = createGeneralizationScenarios(input.benchmark.url);
   const selectedCount = scenarios.filter(
@@ -159,6 +168,8 @@ async function runGeneralizationBenchmark(input: {
   const executor = new GeneralizationPlaywrightExecutor({
     benchmark: input.benchmark,
     ollamaClient: input.ollamaClient ?? undefined,
+    hybridStrategy: input.strategies.hybrid as
+      HybridBenchmarkPlannerStrategy | undefined,
     onRunStart: (scenario, repetition, planner) => {
       completedRuns += 1;
       console.log(
@@ -168,9 +179,7 @@ async function runGeneralizationBenchmark(input: {
   });
   const result = await new GeneralizationRunner(executor, {
     gitCommitSha: readGitCommitSha(),
-    plannerModels: input.options.planners.includes("ollama")
-      ? { ollama: OLLAMA_MODEL }
-      : {},
+    plannerModels: plannerModels(input.options.planners),
     benchmarkApplication: {
       name: "benchmark-saas-workspace",
       version: "0.0.0",
@@ -189,6 +198,15 @@ async function runGeneralizationBenchmark(input: {
   if (paths.comparisonPath) {
     console.log(`Planner comparison: ${paths.comparisonPath}`);
   }
+}
+
+function plannerModels(
+  planners: readonly BenchmarkPlanner[]
+): Partial<Record<BenchmarkPlanner, string>> {
+  return {
+    ...(planners.includes("ollama") ? { ollama: OLLAMA_MODEL } : {}),
+    ...(planners.includes("hybrid") ? { hybrid: "rule-based-v1" } : {})
+  };
 }
 
 function requiredStrategy(

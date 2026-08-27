@@ -123,6 +123,35 @@ describe("generalization robustness reporting", () => {
     expect(calculateLatencyRatio(1_000, 7_500)).toBe(7.5);
     expect(calculateLatencyRatio(0, 7_500)).toBeNull();
   });
+
+  it("adds Hybrid routing and measured performance to the V4 report", async () => {
+    const result = await new GeneralizationRunner({
+      execute: async () =>
+        execution({
+          goalCompleted: true,
+          routing: {
+            requestedStrategy: "hybrid",
+            selectedPlanner: "deterministic",
+            executedPlanner: "deterministic",
+            routingRule: "ambiguous-semantic-default",
+            routingReason: "Ambiguous goals use the conservative default.",
+            fallback: false,
+            fallbackReason: null,
+            recommendedPlanner: "deterministic",
+            matchedRecommendation: true
+          }
+        })
+    }).run([scenario("hybrid")], {
+      runsPerScenario: 1,
+      planners: ["hybrid"]
+    });
+    const report = formatGeneralizationMarkdownReport(result);
+
+    expect(report).toContain("Benchmark V4 - Hybrid Routing Evaluation");
+    expect(report).toContain("Selected deterministic: 100.0% (1)");
+    expect(report).toContain("Routing accuracy proxy: 100.0% (1/1)");
+    expect(report).toContain("Ambiguous goal completion: 100.0%");
+  });
 });
 
 function runner(
@@ -158,7 +187,17 @@ function scenario(
     hiddenExpectationSummary: "Reach a hidden evaluator state.",
     maxSteps: 5,
     credentialsRequirement: "none",
+    routingHints: {
+      mode: "functional",
+      hasExpectedBehavior: false,
+      exactWorkflowKnown: false,
+      explicitlyExploratory: false,
+      hiddenIssueDiscoveryRequested: false,
+      recoveryRequired: category === "recovery",
+      semanticGoalAmbiguous: category === "ambiguous_goal"
+    },
     evaluatorOnly: {
+      recommendedPlanner: category === "recovery" ? "ollama" : "deterministic",
       expectedBugIds: [],
       bugSignals: [],
       goalState: { textIncludes: "done" },

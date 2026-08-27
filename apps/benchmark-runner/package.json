@@ -21,6 +21,7 @@
     "@vibeqa/evaluation": "0.0.0",
     "@vibeqa/explorer": "0.0.0",
     "@vibeqa/llm": "0.0.0",
+    "@vibeqa/planner": "0.0.0",
     "@vibeqa/schemas": "0.0.0",
     "@vibeqa/test-engine": "0.0.0",
     "commander": "^12.1.0"
