@@ -100,7 +100,11 @@ export class GeneralizationRunner {
     }
 
     const configuration: GeneralizationConfiguration = {
+      benchmarkSuiteVersion: "3.0.0",
       runsPerScenario,
+      scenarioCount: selectedScenarios.length,
+      executionsPerPlanner: selectedScenarios.length * runsPerScenario,
+      totalExecutions: selectedScenarios.length * runsPerScenario * planners.length,
       scenarioIds: selectedScenarios.map((scenario) => scenario.id),
       scenarioFilter: [...(options.scenarioIds ?? [])],
       difficultyFilter: [...(options.difficulties ?? [])],

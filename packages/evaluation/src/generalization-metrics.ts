@@ -2,8 +2,11 @@ import { describeDistribution } from "./metrics.js";
 import type {
   GeneralizationMetrics,
   GeneralizationPerformanceMetrics,
-  GeneralizationRun
+  GeneralizationRun,
+  WilsonConfidenceInterval
 } from "./generalization-types.js";
+
+const WILSON_95_Z_SCORE = 1.959963984540054;
 
 export function aggregateGeneralizationMetrics(
   runs: readonly GeneralizationRun[]
@@ -29,6 +32,20 @@ export function aggregateGeneralizationMetrics(
         };
       }
     ),
+    scenarioPlannerPerformance: [
+      ...groupBy(runs, (run) => `${run.planner}:${run.scenarioId}`).values()
+    ].map((scenarioRuns) => {
+      const first = requiredFirst(scenarioRuns);
+      return {
+        scenarioId: first.scenarioId,
+        scenarioName: first.scenarioName,
+        category: first.category,
+        difficulty: first.difficulty,
+        planner: first.planner,
+        modelName: first.modelName,
+        ...aggregatePerformance(scenarioRuns)
+      };
+    }),
     difficultyPerformance: [...groupBy(runs, (run) => run.difficulty).entries()].map(
       ([difficulty, difficultyRuns]) => ({
         difficulty,
@@ -74,6 +91,56 @@ export function calculateRecoverySuccessRate(
   );
 }
 
+export function calculateWilsonConfidenceInterval(
+  successes: number,
+  attempts: number
+): WilsonConfidenceInterval {
+  if (
+    !Number.isInteger(successes) ||
+    !Number.isInteger(attempts) ||
+    successes < 0 ||
+    attempts < 0 ||
+    successes > attempts
+  ) {
+    throw new Error("Wilson interval requires valid integer success counts.");
+  }
+  if (attempts === 0) {
+    return {
+      confidenceLevel: 0.95,
+      successes,
+      attempts,
+      lower: 0,
+      upper: 0
+    };
+  }
+  const observedRate = successes / attempts;
+  const zSquared = WILSON_95_Z_SCORE ** 2;
+  const denominator = 1 + zSquared / attempts;
+  const center = (observedRate + zSquared / (2 * attempts)) / denominator;
+  const margin =
+    (WILSON_95_Z_SCORE / denominator) *
+    Math.sqrt(
+      (observedRate * (1 - observedRate)) / attempts + zSquared / (4 * attempts ** 2)
+    );
+  return {
+    confidenceLevel: 0.95,
+    successes,
+    attempts,
+    lower: successes === 0 ? 0 : Math.max(0, center - margin),
+    upper: successes === attempts ? 1 : Math.min(1, center + margin)
+  };
+}
+
+export function calculateLatencyRatio(
+  baselineDurationMs: number,
+  comparisonDurationMs: number
+): number | null {
+  if (baselineDurationMs <= 0 || comparisonDurationMs < 0) {
+    return null;
+  }
+  return comparisonDurationMs / baselineDurationMs;
+}
+
 function aggregatePerformance(
   runs: readonly GeneralizationRun[]
 ): GeneralizationPerformanceMetrics {
@@ -90,9 +157,24 @@ function aggregatePerformance(
   );
   const steps = describeDistribution(runs.map((run) => run.actions.length));
   const durations = describeDistribution(runs.map((run) => run.durationMs));
+  const plannerDurations = describeDistribution(
+    runs.flatMap((run) =>
+      typeof run.plannerDurationMs === "number" ? [run.plannerDurationMs] : []
+    )
+  );
+  const recoveryRuns = runs.filter((run) => run.recoveryRequired);
+  const recoverySuccesses = recoveryRuns.filter((run) => run.recoverySucceeded).length;
 
   return {
     totalRuns: runs.length,
+    successfulRuns: successfulRuns.length,
+    hiddenBugOpportunities: hiddenBugRuns.length,
+    hiddenBugDetections: discoveredRuns.length,
+    ambiguousGoalOpportunities: ambiguousGoalRuns.length,
+    ambiguousGoalCompletions: ambiguousGoalRuns.filter((run) => run.goalCompleted)
+      .length,
+    recoveryOpportunities: recoveryRuns.length,
+    recoverySuccesses,
     autonomousDiscoveryRate: rate(discoveredRuns.length, hiddenBugRuns.length),
     goalCompletionRate: rate(
       ambiguousGoalRuns.filter((run) => run.goalCompleted).length,
@@ -103,8 +185,21 @@ function aggregatePerformance(
     stateRevisitRate: calculateStateRevisitRate(runs),
     recoverySuccessRate: calculateRecoverySuccessRate(runs),
     averageStepCount: steps.mean,
+    medianStepCount: steps.median,
     averageDurationMs: durations.mean,
+    medianDurationMs: durations.median,
+    plannerDurationSampleCount: plannerDurations.count,
+    averagePlannerDurationMs:
+      plannerDurations.count === 0 ? null : plannerDurations.mean,
+    medianPlannerDurationMs:
+      plannerDurations.count === 0 ? null : plannerDurations.median,
     repeatedRunStability: calculateGeneralizationStability(runs),
+    averageUniqueStates: average(
+      runs.map(
+        (run) =>
+          new Set(run.observations.map((observation) => observation.fingerprint)).size
+      )
+    ),
     timeToDiscovery: discoverySteps,
     averageUniqueStatesBeforeDiscovery: average(
       discoveredRuns.map((run) => run.uniqueStatesBeforeDiscovery)
@@ -123,6 +218,24 @@ function aggregatePerformance(
       ),
       withinMaxSteps: rate(
         successfulRuns.filter((run) => successStep(run) <= run.maxSteps).length,
+        runs.length
+      )
+    },
+    confidenceIntervals: {
+      autonomousDiscovery: calculateWilsonConfidenceInterval(
+        discoveredRuns.length,
+        hiddenBugRuns.length
+      ),
+      goalCompletion: calculateWilsonConfidenceInterval(
+        ambiguousGoalRuns.filter((run) => run.goalCompleted).length,
+        ambiguousGoalRuns.length
+      ),
+      recoverySuccess: calculateWilsonConfidenceInterval(
+        recoverySuccesses,
+        recoveryRuns.length
+      ),
+      expectedOutcome: calculateWilsonConfidenceInterval(
+        successfulRuns.length,
         runs.length
       )
     }

@@ -112,6 +112,32 @@ describe("generalization benchmark runner", () => {
     }
   }, 30_000);
 
+  it("measures Ollama generation wall time separately from execution duration", async () => {
+    const benchmark = await startBenchmarkServer({ port: 0 });
+    const times = [0, 10, 30, 35, 55, 100];
+    try {
+      const scenario = {
+        ...requiredScenario(benchmark.url, "discover-dashboard-failure"),
+        maxSteps: 2
+      };
+      const execution = await new GeneralizationPlaywrightExecutor({
+        benchmark,
+        ollamaClient: new RecordingClient([
+          JSON.stringify({
+            action: { type: "click", selector: "#trigger-client-error" }
+          }),
+          "null"
+        ]),
+        now: () => times.shift() ?? 100
+      }).execute(scenario, 1, "ollama");
+
+      expect(execution.durationMs).toBe(100);
+      expect(execution.plannerDurationMs).toBe(40);
+    } finally {
+      await benchmark.close();
+    }
+  }, 30_000);
+
   it("distinguishes same-URL dashboard states by observation fingerprint", async () => {
     const benchmark = await startBenchmarkServer({ port: 0 });
     const browser = await PlaywrightBrowserController.launch({ headless: true });

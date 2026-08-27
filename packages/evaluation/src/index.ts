@@ -17,12 +17,15 @@ export {
   aggregateGeneralizationMetrics,
   calculateDetourRate,
   calculateExplorationEfficiency,
+  calculateLatencyRatio,
   calculateRecoverySuccessRate,
-  calculateStateRevisitRate
+  calculateStateRevisitRate,
+  calculateWilsonConfidenceInterval
 } from "./generalization-metrics.js";
 export {
   formatGeneralizationMarkdownReport,
   formatGeneralizationSummary,
+  generalizationInterpretation,
   writeGeneralizationReport
 } from "./generalization-reporter.js";
 export type { GeneralizationReportPaths } from "./generalization-reporter.js";
@@ -38,6 +41,7 @@ export type {
   GeneralizationActionRecord,
   GeneralizationBugSignal,
   GeneralizationClassification,
+  GeneralizationConfidenceIntervals,
   GeneralizationConfiguration,
   GeneralizationEvaluatorOnly,
   GeneralizationExecution,
@@ -53,9 +57,11 @@ export type {
   GeneralizationScenarioCategory,
   GeneralizationScenarioExecutor,
   GeneralizationScenarioMetrics,
+  GeneralizationScenarioPlannerMetrics,
   GeneralizationScenarioSummary,
   GeneralizationSuiteResult,
-  StepBudgetMetrics
+  StepBudgetMetrics,
+  WilsonConfidenceInterval
 } from "./generalization-types.js";
 export type {
   BenchmarkClassification,

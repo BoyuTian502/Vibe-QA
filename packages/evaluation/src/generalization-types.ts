@@ -96,6 +96,7 @@ export interface GeneralizationExecution {
   detectedBugIds: string[];
   infrastructureError: string | null;
   durationMs: number;
+  plannerDurationMs?: number | null;
   safetyEvents: SafetyEventCounts;
   observations: GeneralizationObservedState[];
   actions: GeneralizationActionRecord[];
@@ -133,8 +134,30 @@ export interface StepBudgetMetrics {
   withinMaxSteps: number;
 }
 
+export interface WilsonConfidenceInterval {
+  confidenceLevel: 0.95;
+  successes: number;
+  attempts: number;
+  lower: number;
+  upper: number;
+}
+
+export interface GeneralizationConfidenceIntervals {
+  autonomousDiscovery: WilsonConfidenceInterval;
+  goalCompletion: WilsonConfidenceInterval;
+  recoverySuccess: WilsonConfidenceInterval;
+  expectedOutcome: WilsonConfidenceInterval;
+}
+
 export interface GeneralizationPerformanceMetrics {
   totalRuns: number;
+  successfulRuns: number;
+  hiddenBugOpportunities: number;
+  hiddenBugDetections: number;
+  ambiguousGoalOpportunities: number;
+  ambiguousGoalCompletions: number;
+  recoveryOpportunities: number;
+  recoverySuccesses: number;
   autonomousDiscoveryRate: number;
   goalCompletionRate: number;
   explorationEfficiency: number;
@@ -142,12 +165,19 @@ export interface GeneralizationPerformanceMetrics {
   stateRevisitRate: number;
   recoverySuccessRate: number;
   averageStepCount: number;
+  medianStepCount: number;
   averageDurationMs: number;
+  medianDurationMs: number;
+  plannerDurationSampleCount: number;
+  averagePlannerDurationMs: number | null;
+  medianPlannerDurationMs: number | null;
   repeatedRunStability: number;
+  averageUniqueStates: number;
   timeToDiscovery: DistributionStatistics;
   averageUniqueStatesBeforeDiscovery: number;
   averageUniqueElementsBeforeDiscovery: number;
   stepBudgetSuccess: StepBudgetMetrics;
+  confidenceIntervals: GeneralizationConfidenceIntervals;
 }
 
 export interface GeneralizationScenarioMetrics extends GeneralizationPerformanceMetrics {
@@ -162,16 +192,26 @@ export interface GeneralizationPlannerMetrics extends GeneralizationPerformanceM
   modelName: string | null;
 }
 
+export interface GeneralizationScenarioPlannerMetrics extends GeneralizationScenarioMetrics {
+  planner: BenchmarkPlanner;
+  modelName: string | null;
+}
+
 export interface GeneralizationMetrics extends GeneralizationPerformanceMetrics {
   plannerPerformance: GeneralizationPlannerMetrics[];
   scenarioPerformance: GeneralizationScenarioMetrics[];
+  scenarioPlannerPerformance: GeneralizationScenarioPlannerMetrics[];
   difficultyPerformance: Array<
     GeneralizationPerformanceMetrics & { difficulty: BenchmarkDifficulty }
   >;
 }
 
 export interface GeneralizationConfiguration {
+  benchmarkSuiteVersion: "3.0.0";
   runsPerScenario: number;
+  scenarioCount: number;
+  executionsPerPlanner: number;
+  totalExecutions: number;
   scenarioIds: string[];
   scenarioFilter: string[];
   difficultyFilter: BenchmarkDifficulty[];

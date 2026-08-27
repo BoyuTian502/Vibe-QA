@@ -122,9 +122,13 @@ export class GeneralizationPlaywrightExecutor implements GeneralizationScenarioE
         throw new Error("The Ollama generalization planner is not configured.");
       }
       await plannerBrowser.navigate(plannerInput.startUrl);
+      const agentClient = new GeneralizationAgentClient(
+        this.options.ollamaClient,
+        this.now
+      );
       const agent = new Agent({
         browser: plannerBrowser,
-        llmClient: new GeneralizationAgentClient(this.options.ollamaClient),
+        llmClient: agentClient,
         safetyPolicy: this.safetyPolicy,
         maxSteps: plannerInput.maxSteps
       });
@@ -134,7 +138,8 @@ export class GeneralizationPlaywrightExecutor implements GeneralizationScenarioE
         agent.getTrace(),
         agent.state.errors,
         agent.getPendingApproval() !== null,
-        Math.max(0, this.now() - startedAt)
+        Math.max(0, this.now() - startedAt),
+        agentClient.totalGenerationDurationMs
       );
     } finally {
       await browser?.close();
@@ -143,7 +148,16 @@ export class GeneralizationPlaywrightExecutor implements GeneralizationScenarioE
 }
 
 class GeneralizationAgentClient implements LLMClient {
-  constructor(private readonly client: LLMClient) {}
+  private generationDurationMs = 0;
+
+  constructor(
+    private readonly client: LLMClient,
+    private readonly now: () => number = Date.now
+  ) {}
+
+  get totalGenerationDurationMs(): number {
+    return this.generationDurationMs;
+  }
 
   async generate(prompt: string): Promise<string> {
     const constrainedPrompt = [
@@ -160,9 +174,15 @@ class GeneralizationAgentClient implements LLMClient {
     ].join("\n");
     let correction = "";
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const response = await this.client.generate(
-        correction ? `${constrainedPrompt}\n\n${correction}` : constrainedPrompt
-      );
+      const generationStartedAt = this.now();
+      let response: string;
+      try {
+        response = await this.client.generate(
+          correction ? `${constrainedPrompt}\n\n${correction}` : constrainedPrompt
+        );
+      } finally {
+        this.generationDurationMs += Math.max(0, this.now() - generationStartedAt);
+      }
       try {
         const action = normalizeModelAction(response, prompt);
         return action ? JSON.stringify(action) : "null";
@@ -458,6 +478,7 @@ export function evaluateExplorationResult(
     observations,
     actions,
     durationMs,
+    plannerDurationMs: null,
     safetyEvents,
     infrastructureError:
       result.stopReason === "error"
@@ -473,7 +494,8 @@ export function evaluateAgentTrace(
   trace: AgentTrace,
   errors: readonly string[],
   approvalRequired: boolean,
-  durationMs: number
+  durationMs: number,
+  plannerDurationMs: number | null = null
 ): GeneralizationExecution {
   const observationSteps = trace.steps.filter(
     (step): step is typeof step & { observation: Observation } =>
@@ -518,6 +540,7 @@ export function evaluateAgentTrace(
     observations,
     actions,
     durationMs,
+    plannerDurationMs,
     safetyEvents,
     infrastructureError: infrastructureError ?? null,
     approvalRequired,
@@ -529,6 +552,7 @@ interface TrajectoryInput {
   observations: GeneralizationObservedState[];
   actions: GeneralizationActionRecord[];
   durationMs: number;
+  plannerDurationMs?: number | null;
   safetyEvents: SafetyEventCounts;
   infrastructureError: string | null;
   approvalRequired: boolean;
@@ -614,6 +638,7 @@ export function evaluateTrajectory(
     detectedBugIds,
     infrastructureError: input.infrastructureError,
     durationMs: input.durationMs,
+    plannerDurationMs: input.plannerDurationMs ?? null,
     safetyEvents: input.safetyEvents,
     observations: input.observations,
     actions: input.actions,

@@ -236,6 +236,7 @@ recovery scenarios with realistic safe distractors.
 npm run benchmark:qa -- --suite generalization --planner deterministic --runs 2
 npm run benchmark:qa -- --suite generalization --planner ollama --runs 2
 npm run benchmark:qa -- --suite generalization --compare deterministic,ollama --runs 3
+npm run benchmark:qa -- --suite generalization --compare deterministic,ollama --runs 10
 ```
 
 The deterministic V3 baseline uses the existing Explorer candidate scoring. It
@@ -247,9 +248,22 @@ metadata remain evaluator-only.
 
 V3 reports autonomous discovery, ambiguous-goal completion, useful new states
 per action, detours, state revisits, recovery, time to discovery, coverage before
-discovery, and success within 5, 10, and maximum steps. Its results remain
-separate from V2 controlled-workflow reliability so the two success rates are
-not conflated. Artifacts use the same
+discovery, and success within 5, 10, and maximum steps. Reports include 95%
+Wilson confidence intervals for proportion metrics and planner-by-scenario
+attempts, successes, step distributions, duration, stability, recovery,
+coverage, detours, and revisits. Sample size, model, suite version, and Git
+commit are shown beside the results. Metric-derived interpretation calls out
+mixed scenario evidence instead of turning one result into a category-wide
+claim.
+
+Execution duration includes browser startup, authentication, browser work,
+safety checks, and model calls, but excludes browser shutdown and report
+writing. For Ollama runs, V3 also records elapsed `LLMClient.generate` wall time
+so local planner latency can be separated approximately from the rest of the
+workflow. This is request/inference wall time, not pure model compute time.
+
+V3 results remain separate from V2 controlled-workflow reliability so the two
+success rates are not conflated. Artifacts use the same
 `run-output/benchmark/<timestamp>/` location and include
 `suite: "generalization-v3"` metadata.
 

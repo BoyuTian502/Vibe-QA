@@ -1,10 +1,17 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { calculateLatencyRatio } from "./generalization-metrics.js";
 import type {
   GeneralizationPerformanceMetrics,
-  GeneralizationSuiteResult
+  GeneralizationPlannerMetrics,
+  GeneralizationScenarioCategory,
+  GeneralizationScenarioPlannerMetrics,
+  GeneralizationSuiteResult,
+  WilsonConfidenceInterval
 } from "./generalization-types.js";
+
+const MEANINGFUL_RATE_DIFFERENCE = 0.05;
 
 export interface GeneralizationReportPaths {
   outputDirectory: string;
@@ -44,7 +51,10 @@ export async function writeGeneralizationReport(
         suite: result.suite,
         suiteId: result.suiteId,
         generatedAt: result.generatedAt,
-        planners: result.metrics.plannerPerformance
+        sample: sampleMetadata(result),
+        planners: result.metrics.plannerPerformance,
+        scenariosByPlanner: result.metrics.scenarioPlannerPerformance,
+        interpretation: generalizationInterpretation(result)
       })
     );
   }
@@ -59,18 +69,23 @@ export function formatGeneralizationSummary(result: GeneralizationSuiteResult): 
     "Benchmark V3 - Generalization & Autonomous Discovery",
     "--------------------------------------------------",
     "",
-    `Scenarios: ${result.scenarios.length}`,
-    `Total runs: ${metrics.totalRuns}`,
+    `Suite version: ${result.configuration.benchmarkSuiteVersion}`,
+    `Scenarios: ${result.configuration.scenarioCount}`,
+    `Executions per planner: ${result.configuration.executionsPerPlanner}`,
+    `Total executions: ${result.configuration.totalExecutions}`,
     `Planner strategies: ${result.configuration.planners.join(", ")}`,
+    `Models: ${formatModels(result)}`,
+    `Git commit: ${result.configuration.gitCommitSha ?? "unavailable"}`,
     "",
-    `Autonomous Discovery: ${percentage(metrics.autonomousDiscoveryRate)}`,
-    `Ambiguous Goal Completion: ${percentage(metrics.goalCompletionRate)}`,
+    `Autonomous Discovery: ${proportionValue(metrics.confidenceIntervals.autonomousDiscovery)}`,
+    `Ambiguous Goal Completion: ${proportionValue(metrics.confidenceIntervals.goalCompletion)}`,
     `Exploration Efficiency: ${decimal(metrics.explorationEfficiency)}`,
     `Detour Rate: ${percentage(metrics.detourRate)}`,
     `State Revisit Rate: ${percentage(metrics.stateRevisitRate)}`,
-    `Recovery Success: ${percentage(metrics.recoverySuccessRate)}`,
-    `Average Steps: ${decimal(metrics.averageStepCount)}`,
-    `Average Duration: ${seconds(metrics.averageDurationMs)}`,
+    `Recovery Success: ${proportionValue(metrics.confidenceIntervals.recoverySuccess)}`,
+    `Expected-outcome Stability: ${proportionValue(metrics.confidenceIntervals.expectedOutcome)}`,
+    `Average / Median Steps: ${decimal(metrics.averageStepCount)} / ${decimal(metrics.medianStepCount)}`,
+    `Average / Median Duration: ${seconds(metrics.averageDurationMs)} / ${seconds(metrics.medianDurationMs)}`,
     `Time to Discovery (mean / median): ${decimal(metrics.timeToDiscovery.mean)} / ${decimal(metrics.timeToDiscovery.median)} steps`,
     `Success within 5 / 10 / max steps: ${percentage(metrics.stepBudgetSuccess.within5Steps)} / ${percentage(metrics.stepBudgetSuccess.within10Steps)} / ${percentage(metrics.stepBudgetSuccess.withinMaxSteps)}`,
     ""
@@ -80,6 +95,7 @@ export function formatGeneralizationSummary(result: GeneralizationSuiteResult): 
 export function formatGeneralizationMarkdownReport(
   result: GeneralizationSuiteResult
 ): string {
+  const interpretation = generalizationInterpretation(result);
   return [
     "# Vibe-QA Evaluation Benchmark",
     "",
@@ -91,16 +107,51 @@ export function formatGeneralizationMarkdownReport(
     "",
     "V3 measures behavior when the execution path and bug location are not explicitly specified.",
     "",
+    "### Sample Metadata",
+    "",
     `- Generated: ${result.generatedAt}`,
     `- Suite: ${result.suite}`,
+    `- Benchmark suite version: ${result.configuration.benchmarkSuiteVersion}`,
+    `- Scenarios: ${result.configuration.scenarioCount}`,
+    `- Repetitions per scenario and planner: ${result.configuration.runsPerScenario}`,
+    `- Executions per planner: ${result.configuration.executionsPerPlanner}`,
     `- Planners: ${result.configuration.planners.join(", ")}`,
-    `- Runs per scenario: ${result.configuration.runsPerScenario}`,
+    `- Total executions: ${result.configuration.totalExecutions}`,
+    `- Models: ${formatModels(result)}`,
     `- Git commit: ${result.configuration.gitCommitSha ?? "unavailable"}`,
+    `- Benchmark application: ${result.configuration.benchmarkApplication.name} ${result.configuration.benchmarkApplication.version}`,
+    `- Benchmark configuration: ${result.configuration.benchmarkApplication.configuration}`,
     `- Browser isolation: ${result.configuration.browserIsolation}`,
     "",
     "### Generalization Metrics",
     "",
     performanceTable(result.metrics),
+    "",
+    "### Planner Comparison",
+    "",
+    result.metrics.plannerPerformance.length > 1
+      ? plannerComparisonTable(result.metrics.plannerPerformance)
+      : "A planner comparison is generated when more than one planner is executed.",
+    "",
+    "### Per-Scenario Statistics",
+    "",
+    scenarioPlannerTable(result.metrics.scenarioPlannerPerformance),
+    "",
+    "### Evidence-Based Interpretation",
+    "",
+    ...interpretation.metricFindings.map((finding) => `- ${finding}`),
+    "",
+    "### Hybrid-Strategy Analysis",
+    "",
+    ...interpretation.hybridFindings.map((finding) => `- ${finding}`),
+    "",
+    "This section is descriptive only. It does not implement or evaluate a Hybrid Planner.",
+    "",
+    "### Cost and Latency",
+    "",
+    ...latencyAnalysis(result),
+    "",
+    "No API dollar cost is reported because the Ollama model runs locally.",
     "",
     "### Scenario Design",
     "",
@@ -113,29 +164,16 @@ export function formatGeneralizationMarkdownReport(
     "",
     "Evaluator-only selectors, exact action sequences, credentials, and seeded bug IDs are not included in planner input.",
     "",
-    "### Planner Comparison",
-    "",
-    result.metrics.plannerPerformance.length > 1
-      ? [
-          "| Planner | Discovery | Goal completion | Efficiency | Detours | Revisits | Recovery | Avg steps | Avg duration |",
-          "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-          ...result.metrics.plannerPerformance.map(
-            (planner) =>
-              `| ${plannerLabel(planner.planner, planner.modelName)} | ${percentage(planner.autonomousDiscoveryRate)} | ${percentage(planner.goalCompletionRate)} | ${decimal(planner.explorationEfficiency)} | ${percentage(planner.detourRate)} | ${percentage(planner.stateRevisitRate)} | ${percentage(planner.recoverySuccessRate)} | ${decimal(planner.averageStepCount)} | ${seconds(planner.averageDurationMs)} |`
-          )
-        ].join("\n")
-      : "A planner comparison is generated when more than one planner is executed.",
-    "",
     "### Difficulty Breakdown",
     "",
     "| Difficulty | Runs | Discovery | Goal completion | Efficiency | Recovery |",
     "| --- | ---: | ---: | ---: | ---: | ---: |",
     ...result.metrics.difficultyPerformance.map(
       (item) =>
-        `| ${item.difficulty} | ${item.totalRuns} | ${percentage(item.autonomousDiscoveryRate)} | ${percentage(item.goalCompletionRate)} | ${decimal(item.explorationEfficiency)} | ${percentage(item.recoverySuccessRate)} |`
+        `| ${item.difficulty} | ${item.totalRuns} | ${proportionValue(item.confidenceIntervals.autonomousDiscovery)} | ${proportionValue(item.confidenceIntervals.goalCompletion)} | ${decimal(item.explorationEfficiency)} | ${proportionValue(item.confidenceIntervals.recoverySuccess)} |`
     ),
     "",
-    "### Scenario Results",
+    "### Individual Runs",
     "",
     "| Scenario | Planner | Result | Steps | States | Detours | Discovery step |",
     "| --- | --- | --- | ---: | ---: | ---: | ---: |",
@@ -146,38 +184,322 @@ export function formatGeneralizationMarkdownReport(
     "",
     "### Metric Definitions",
     "",
+    "- Proportion intervals are two-sided 95% Wilson confidence intervals. N/A means the selected sample had no applicable opportunities.",
     "- Exploration efficiency is the number of first-time state transitions divided by executed actions.",
     "- A detour is a failed action, a no-state-change action, or a transition to an already observed state.",
     "- State revisit rate is repeated state observations divided by all observations.",
     "- Recovery succeeds when a run reaches its hidden outcome after at least one detour.",
+    "- Expected-outcome stability is successful benchmark outcomes divided by attempts. The legacy repeated-run stability metric remains unchanged.",
     "- Coverage before discovery counts unique states and interactive elements observed through the first hidden-bug signal.",
     "",
     "### Limitations",
     "",
-    "This is a deterministic local benchmark application with a small scenario set. It measures comparative behavior under fixed conditions, not universal website-testing accuracy. Planner results may also vary with local model version and host performance.",
+    "This is a deterministic local benchmark application with a fixed scenario set. It measures comparative behavior under controlled conditions, not universal website-testing accuracy. Confidence intervals quantify sampling uncertainty for this benchmark only. Planner results can vary with model version, model settings, host load, browser startup, and local hardware.",
     ""
   ].join("\n");
+}
+
+export function generalizationInterpretation(result: GeneralizationSuiteResult): {
+  metricFindings: string[];
+  hybridFindings: string[];
+} {
+  const pair = plannerPair(result.metrics.plannerPerformance);
+  if (!pair) {
+    return {
+      metricFindings: [
+        "A planner comparison requires both deterministic and Ollama results."
+      ],
+      hybridFindings: [
+        "No planner suitability conclusion is available from a single-planner sample."
+      ]
+    };
+  }
+  const [deterministic, ollama] = pair;
+  const ambiguous = categoryComparison(
+    result.metrics.scenarioPlannerPerformance,
+    "ambiguous_goal",
+    (metrics) => metrics.goalCompletionRate
+  );
+  const recovery = recoveryComparison(result.metrics.scenarioPlannerPerformance);
+  const discoveryFinding = compareHigher(
+    "Hidden bug discovery",
+    deterministic.autonomousDiscoveryRate,
+    ollama.autonomousDiscoveryRate
+  );
+  const ambiguousFinding = ambiguous.mixed
+    ? `Ambiguous goals are mixed by scenario; aggregate completion is ${percentage(deterministic.goalCompletionRate)} for deterministic and ${percentage(ollama.goalCompletionRate)} for Ollama.`
+    : compareHigher(
+        "Ambiguous goal completion",
+        deterministic.goalCompletionRate,
+        ollama.goalCompletionRate
+      );
+  const recoveryFinding = recovery.mixed
+    ? `Recovery results are mixed by scenario; aggregate recovery is ${percentage(deterministic.recoverySuccessRate)} for deterministic and ${percentage(ollama.recoverySuccessRate)} for Ollama.`
+    : recovery.scenarioCount < 2
+      ? `Recovery evidence comes from ${recovery.scenarioCount} comparable scenario${recovery.scenarioCount === 1 ? "" : "s"}; aggregate recovery is ${percentage(deterministic.recoverySuccessRate)} for deterministic and ${percentage(ollama.recoverySuccessRate)} for Ollama, so no category-wide superiority is claimed.`
+      : compareHigher(
+          "Recovery success",
+          deterministic.recoverySuccessRate,
+          ollama.recoverySuccessRate
+        );
+
+  return {
+    metricFindings: [
+      discoveryFinding,
+      ambiguousFinding,
+      recoveryFinding,
+      compareHigher(
+        "Exploration efficiency",
+        deterministic.explorationEfficiency,
+        ollama.explorationEfficiency,
+        decimal
+      ),
+      compareLower("Detour rate", deterministic.detourRate, ollama.detourRate),
+      compareLower(
+        "State revisit rate",
+        deterministic.stateRevisitRate,
+        ollama.stateRevisitRate
+      ),
+      compareLower(
+        "Average duration",
+        deterministic.averageDurationMs,
+        ollama.averageDurationMs,
+        seconds
+      ),
+      compareHigher(
+        "Expected-outcome stability",
+        expectedOutcomeRate(deterministic),
+        expectedOutcomeRate(ollama)
+      )
+    ],
+    hybridFindings: [
+      "Controlled functional/regression: V3 does not measure pre-specified controlled paths, so this suite does not replace the separate V2 reliability evidence.",
+      `Autonomous exploratory discovery: ${suitabilityConclusion(deterministic.autonomousDiscoveryRate, ollama.autonomousDiscoveryRate)} when hidden-path discovery is the deciding metric.`,
+      ambiguous.mixed
+        ? "Ambiguous semantic goals: neither planner is preferred because scenario-level results are mixed."
+        : `Ambiguous semantic goals: ${suitabilityConclusion(deterministic.goalCompletionRate, ollama.goalCompletionRate)} from measured goal completion.`,
+      recovery.mixed
+        ? "Recovery: neither planner is preferred because scenario-level recovery evidence is mixed."
+        : `Recovery: ${suitabilityConclusion(deterministic.recoverySuccessRate, ollama.recoverySuccessRate)} from aggregate recovery, subject to the scenario-count qualification above.`,
+      `Latency-sensitive use: ${suitabilityConclusion(ollama.averageDurationMs, deterministic.averageDurationMs)} from lower average execution duration.`,
+      `Reliability-sensitive use: ${suitabilityConclusion(expectedOutcomeRate(deterministic), expectedOutcomeRate(ollama))} from expected-outcome stability.`
+    ]
+  };
 }
 
 function performanceTable(metrics: GeneralizationPerformanceMetrics): string {
   return [
     "| Metric | Value |",
     "| --- | ---: |",
-    `| Autonomous discovery | ${percentage(metrics.autonomousDiscoveryRate)} |`,
-    `| Ambiguous goal completion | ${percentage(metrics.goalCompletionRate)} |`,
+    `| Autonomous discovery | ${proportionValue(metrics.confidenceIntervals.autonomousDiscovery)} |`,
+    `| Ambiguous goal completion | ${proportionValue(metrics.confidenceIntervals.goalCompletion)} |`,
     `| Exploration efficiency | ${decimal(metrics.explorationEfficiency)} |`,
     `| Detour rate | ${percentage(metrics.detourRate)} |`,
     `| State revisit rate | ${percentage(metrics.stateRevisitRate)} |`,
-    `| Recovery success | ${percentage(metrics.recoverySuccessRate)} |`,
-    `| Repeated-run stability | ${percentage(metrics.repeatedRunStability)} |`,
-    `| Average steps | ${decimal(metrics.averageStepCount)} |`,
-    `| Average duration | ${seconds(metrics.averageDurationMs)} |`,
+    `| Recovery success | ${proportionValue(metrics.confidenceIntervals.recoverySuccess)} |`,
+    `| Expected-outcome stability | ${proportionValue(metrics.confidenceIntervals.expectedOutcome)} |`,
+    `| Repeated-run stability (legacy) | ${percentage(metrics.repeatedRunStability)} |`,
+    `| Average / median steps | ${decimal(metrics.averageStepCount)} / ${decimal(metrics.medianStepCount)} |`,
+    `| Average / median duration | ${seconds(metrics.averageDurationMs)} / ${seconds(metrics.medianDurationMs)} |`,
+    `| Average unique states | ${decimal(metrics.averageUniqueStates)} |`,
     `| Time to discovery, mean | ${decimal(metrics.timeToDiscovery.mean)} steps |`,
     `| Time to discovery, median | ${decimal(metrics.timeToDiscovery.median)} steps |`,
     `| Success within 5 steps | ${percentage(metrics.stepBudgetSuccess.within5Steps)} |`,
     `| Success within 10 steps | ${percentage(metrics.stepBudgetSuccess.within10Steps)} |`,
     `| Success within max steps | ${percentage(metrics.stepBudgetSuccess.withinMaxSteps)} |`
   ].join("\n");
+}
+
+function plannerComparisonTable(
+  planners: readonly GeneralizationPlannerMetrics[]
+): string {
+  return [
+    "| Planner | Runs | Discovery (95% CI) | Goal completion (95% CI) | Efficiency | Detours | Revisits | Recovery (95% CI) | Stability (95% CI) | Avg / median steps | Avg / median duration |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ...planners.map(
+      (planner) =>
+        `| ${plannerLabel(planner.planner, planner.modelName)} | ${planner.totalRuns} | ${proportionValue(planner.confidenceIntervals.autonomousDiscovery)} | ${proportionValue(planner.confidenceIntervals.goalCompletion)} | ${decimal(planner.explorationEfficiency)} | ${percentage(planner.detourRate)} | ${percentage(planner.stateRevisitRate)} | ${proportionValue(planner.confidenceIntervals.recoverySuccess)} | ${proportionValue(planner.confidenceIntervals.expectedOutcome)} | ${decimal(planner.averageStepCount)} / ${decimal(planner.medianStepCount)} | ${seconds(planner.averageDurationMs)} / ${seconds(planner.medianDurationMs)} |`
+    )
+  ].join("\n");
+}
+
+function scenarioPlannerTable(
+  metrics: readonly GeneralizationScenarioPlannerMetrics[]
+): string {
+  return [
+    "| Scenario | Planner | Attempts | Successes | Success rate (95% CI) | Hidden bugs | Avg / median steps | Avg duration | Stability | Recovery | Avg states | Detours | Revisits |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ...metrics.map(
+      (item) =>
+        `| ${escapeCell(item.scenarioName)} | ${plannerLabel(item.planner, item.modelName)} | ${item.totalRuns} | ${item.successfulRuns} | ${proportionValue(item.confidenceIntervals.expectedOutcome)} | ${proportionValue(item.confidenceIntervals.autonomousDiscovery)} | ${decimal(item.averageStepCount)} / ${decimal(item.medianStepCount)} | ${seconds(item.averageDurationMs)} | ${percentage(item.repeatedRunStability)} | ${proportionValue(item.confidenceIntervals.recoverySuccess)} | ${decimal(item.averageUniqueStates)} | ${percentage(item.detourRate)} | ${percentage(item.stateRevisitRate)} |`
+    )
+  ].join("\n");
+}
+
+function latencyAnalysis(result: GeneralizationSuiteResult): string[] {
+  const pair = plannerPair(result.metrics.plannerPerformance);
+  const lines = result.metrics.plannerPerformance.map(
+    (planner) =>
+      `- ${plannerLabel(planner.planner, planner.modelName)}: average ${seconds(planner.averageDurationMs)}, median ${seconds(planner.medianDurationMs)}.`
+  );
+  if (pair) {
+    const [deterministic, ollama] = pair;
+    lines.push(
+      `- Relative slowdown (Ollama/deterministic duration ratio): ${ratioValue(calculateLatencyRatio(deterministic.averageDurationMs, ollama.averageDurationMs))} average and ${ratioValue(calculateLatencyRatio(deterministic.medianDurationMs, ollama.medianDurationMs))} median.`
+    );
+  }
+  const ollama = result.metrics.plannerPerformance.find(
+    (planner) => planner.planner === "ollama"
+  );
+  if (ollama && ollama.averagePlannerDurationMs !== null) {
+    const share =
+      ollama.averageDurationMs <= 0
+        ? null
+        : ollama.averagePlannerDurationMs / ollama.averageDurationMs;
+    lines.push(
+      `- Measured Ollama LLMClient.generate wall time: average ${seconds(ollama.averagePlannerDurationMs)}, median ${seconds(ollama.medianPlannerDurationMs ?? 0)}, across ${ollama.plannerDurationSampleCount} executions (${share === null ? "N/A" : percentage(share)} of average execution duration).`
+    );
+  } else {
+    lines.push("- Planner-only latency was not measured for this result set.");
+  }
+  lines.push(
+    "- Execution duration starts before browser launch and ends after scenario execution. It includes browser startup, authentication, navigation, observations, actions, waits, safety checks, and model calls; it excludes browser shutdown and report writing."
+  );
+  lines.push(
+    "- Planner latency isolates elapsed LLMClient.generate calls, including correction attempts. It is wall-clock inference/request time, not pure model compute time."
+  );
+  return lines;
+}
+
+function sampleMetadata(result: GeneralizationSuiteResult): Record<string, unknown> {
+  return {
+    benchmarkSuiteVersion: result.configuration.benchmarkSuiteVersion,
+    scenarios: result.configuration.scenarioCount,
+    repetitionsPerScenarioAndPlanner: result.configuration.runsPerScenario,
+    executionsPerPlanner: result.configuration.executionsPerPlanner,
+    planners: result.configuration.planners,
+    totalExecutions: result.configuration.totalExecutions,
+    models: result.configuration.plannerModels,
+    gitCommit: result.configuration.gitCommitSha
+  };
+}
+
+function categoryComparison(
+  metrics: readonly GeneralizationScenarioPlannerMetrics[],
+  category: GeneralizationScenarioCategory,
+  valueFor: (metrics: GeneralizationScenarioPlannerMetrics) => number
+): { mixed: boolean; scenarioCount: number } {
+  return scenarioComparison(
+    metrics.filter((item) => item.category === category),
+    valueFor
+  );
+}
+
+function recoveryComparison(metrics: readonly GeneralizationScenarioPlannerMetrics[]): {
+  mixed: boolean;
+  scenarioCount: number;
+} {
+  return scenarioComparison(
+    metrics.filter((item) => item.recoveryOpportunities > 0),
+    (item) => item.recoverySuccessRate
+  );
+}
+
+function scenarioComparison(
+  metrics: readonly GeneralizationScenarioPlannerMetrics[],
+  valueFor: (metrics: GeneralizationScenarioPlannerMetrics) => number
+): { mixed: boolean; scenarioCount: number } {
+  const scenarioIds = new Set(metrics.map((item) => item.scenarioId));
+  const directions: number[] = [];
+  let scenarioCount = 0;
+  for (const scenarioId of scenarioIds) {
+    const deterministic = metrics.find(
+      (item) => item.scenarioId === scenarioId && item.planner === "deterministic"
+    );
+    const ollama = metrics.find(
+      (item) => item.scenarioId === scenarioId && item.planner === "ollama"
+    );
+    if (!deterministic || !ollama) {
+      continue;
+    }
+    scenarioCount += 1;
+    const difference = valueFor(ollama) - valueFor(deterministic);
+    if (Math.abs(difference) >= MEANINGFUL_RATE_DIFFERENCE) {
+      directions.push(Math.sign(difference));
+    }
+  }
+  return {
+    mixed: directions.includes(1) && directions.includes(-1),
+    scenarioCount
+  };
+}
+
+function compareHigher(
+  label: string,
+  deterministicValue: number,
+  ollamaValue: number,
+  format: (value: number) => string = percentage
+): string {
+  const difference = ollamaValue - deterministicValue;
+  if (Math.abs(difference) < MEANINGFUL_RATE_DIFFERENCE) {
+    return `${label} is similar: deterministic ${format(deterministicValue)}, Ollama ${format(ollamaValue)}.`;
+  }
+  const leader = difference > 0 ? "Ollama" : "deterministic";
+  return `${label} is higher for ${leader}: deterministic ${format(deterministicValue)}, Ollama ${format(ollamaValue)}.`;
+}
+
+function compareLower(
+  label: string,
+  deterministicValue: number,
+  ollamaValue: number,
+  format: (value: number) => string = percentage
+): string {
+  const difference = ollamaValue - deterministicValue;
+  if (Math.abs(difference) < MEANINGFUL_RATE_DIFFERENCE) {
+    return `${label} is similar: deterministic ${format(deterministicValue)}, Ollama ${format(ollamaValue)}.`;
+  }
+  const leader = difference < 0 ? "Ollama" : "deterministic";
+  return `${label} is lower for ${leader}: deterministic ${format(deterministicValue)}, Ollama ${format(ollamaValue)}.`;
+}
+
+function suitabilityConclusion(
+  deterministicValue: number,
+  ollamaValue: number
+): string {
+  const difference = ollamaValue - deterministicValue;
+  if (Math.abs(difference) < MEANINGFUL_RATE_DIFFERENCE) {
+    return "neither planner is preferred";
+  }
+  return difference > 0 ? "Ollama is preferred" : "deterministic is preferred";
+}
+
+function plannerPair(
+  planners: readonly GeneralizationPlannerMetrics[]
+): [GeneralizationPlannerMetrics, GeneralizationPlannerMetrics] | null {
+  const deterministic = planners.find((planner) => planner.planner === "deterministic");
+  const ollama = planners.find((planner) => planner.planner === "ollama");
+  return deterministic && ollama ? [deterministic, ollama] : null;
+}
+
+function expectedOutcomeRate(metrics: GeneralizationPerformanceMetrics): number {
+  return metrics.totalRuns === 0 ? 0 : metrics.successfulRuns / metrics.totalRuns;
+}
+
+function proportionValue(interval: WilsonConfidenceInterval): string {
+  return interval.attempts === 0
+    ? "N/A"
+    : `${percentage(interval.successes / interval.attempts)} (95% CI: ${percentage(interval.lower)}-${percentage(interval.upper)}; ${interval.successes}/${interval.attempts})`;
+}
+
+function formatModels(result: GeneralizationSuiteResult): string {
+  const models = Object.entries(result.configuration.plannerModels);
+  return models.length === 0
+    ? "none"
+    : models.map(([planner, model]) => `${planner}=${model}`).join(", ");
+}
+
+function ratioValue(value: number | null): string {
+  return value === null ? "N/A" : `${value.toFixed(2)}x`;
 }
 
 async function writeJson(path: string, value: unknown): Promise<void> {
