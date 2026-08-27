@@ -87,8 +87,7 @@ export class GeneralizationPlaywrightExecutor implements GeneralizationScenarioE
           throw new Error("The Hybrid generalization strategy is not configured.");
         }
         const selection = await this.options.hybridStrategy.select(
-          generalizationTaskMetadata(scenario),
-          scenario.evaluatorOnly.recommendedPlanner
+          generalizationTaskMetadata(scenario)
         );
         routing = selection.routing;
         if (!selection.executedPlanner) {

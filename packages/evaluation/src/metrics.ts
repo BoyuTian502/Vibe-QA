@@ -1,4 +1,5 @@
 import { isSuccessfulClassification } from "./classification.js";
+import { aggregateHybridRoutingDiagnostics } from "./hybrid-diagnostics.js";
 import { aggregateHybridRoutingMetrics } from "./hybrid-metrics.js";
 import type {
   BenchmarkClassification,
@@ -47,7 +48,28 @@ export function aggregateBenchmarkMetrics(
     modePerformance: aggregateModePerformance(runs),
     difficultyPerformance: aggregateDifficultyPerformance(runs),
     plannerPerformance: aggregatePlannerPerformance(runs),
-    hybridRouting: aggregateHybridRoutingMetrics(runs)
+    hybridRouting: aggregateHybridRoutingMetrics(runs),
+    hybridDiagnostics: aggregateHybridRoutingDiagnostics(
+      runs.map((run) => ({
+        planner: run.planner,
+        scenarioId: run.scenarioId,
+        category: run.mode,
+        taskMode: run.mode,
+        classification: run.classification,
+        taskSuccess: isSuccessfulClassification(run.classification),
+        hiddenBugDiscovered:
+          run.expectedBugId === null
+            ? null
+            : run.detectedBugIds.includes(run.expectedBugId),
+        recoverySuccess: null,
+        durationMs: run.durationMs,
+        steps: run.stepCount,
+        explorationEfficiency: null,
+        revisitRate: null,
+        detourRate: null,
+        routing: run.routing
+      }))
+    )
   };
 }
 

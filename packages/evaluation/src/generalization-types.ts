@@ -7,7 +7,9 @@ import type {
   DistributionStatistics,
   ExecutionPlanner,
   HybridRoutingMetrics,
+  HybridRoutingDiagnostics,
   PlannerRoutingMetadata,
+  RoutingRecommendationCategory,
   SafetyEventCounts
 } from "./types.js";
 
@@ -46,6 +48,7 @@ export interface GeneralizationEvaluatorOnly {
   hiddenTargetSelectors: string[];
   hiddenExpectedActions: string[];
   recommendedPlanner: ExecutionPlanner;
+  recommendedPlannerCategory: RoutingRecommendationCategory;
 }
 
 export interface GeneralizationRoutingHints {
@@ -55,6 +58,7 @@ export interface GeneralizationRoutingHints {
   explicitlyExploratory: boolean;
   hiddenIssueDiscoveryRequested: boolean;
   recoveryRequired: boolean;
+  sameUrlStateReasoning: boolean;
   semanticGoalAmbiguous: boolean;
 }
 
@@ -222,6 +226,7 @@ export interface GeneralizationMetrics extends GeneralizationPerformanceMetrics 
     GeneralizationPerformanceMetrics & { difficulty: BenchmarkDifficulty }
   >;
   hybridRouting: HybridRoutingMetrics | null;
+  hybridDiagnostics: HybridRoutingDiagnostics | null;
 }
 
 export interface GeneralizationConfiguration {

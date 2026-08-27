@@ -294,20 +294,34 @@ npm run benchmark:qa -- --planner ollama --mode exploratory --runs 5
 npm run benchmark:qa -- --compare deterministic,ollama --runs 5
 ```
 
-## Hybrid Planner
+## Hybrid Planner V2
 
-Hybrid Planner V1 is an explainable task router over the existing deterministic
-and Ollama strategies. It is not an LLM router and does not receive benchmark
-bug IDs, hidden selectors, evaluator paths, credentials, or secrets.
+Hybrid is an explainable task router over the existing deterministic and Ollama
+strategies. It remains a small deterministic rules engine, not another LLM
+router, and it does not receive benchmark IDs, hidden selectors, evaluator
+recommendations, credentials, or secrets.
 
-The initial rules reflect the measured V3 specialization: deterministic is
-roughly five times faster and performs better on explicit or ambiguous
-controlled goals, while `qwen2.5-coder:7b` performs better on hidden discovery,
-recovery, exploration efficiency, detours, and state revisits. Hybrid therefore
-routes regression and known functional workflows to deterministic execution;
-explicit exploration, hidden-issue discovery, and pathless recovery go to
-Ollama. Ambiguous non-exploratory tasks and unknown cases use the conservative
-deterministic default.
+Hybrid V1 preserved controlled-workflow latency, averaging about 1.14 seconds
+versus 1.02 seconds for deterministic and 2.22 seconds for Ollama. Its latest
+generalization results were weaker: 15.0% hidden discovery, 37.5% ambiguous-goal
+completion, 38.3% recovery, and 30.0% expected-outcome stability. Evaluator-side
+routing diagnostics identified the deterministic defaults for ambiguous goals
+and same-URL state reasoning as evidence-sensitive weaknesses.
+
+Hybrid V2 uses this explicit precedence:
+
+1. Regression and known functional workflows with clear expectations use
+   deterministic execution.
+2. Hidden-issue discovery and explicit exploration use Ollama.
+3. Recovery without a known path and same-URL semantic state reasoning use
+   Ollama.
+4. Ambiguous semantic goals without an explicit workflow use Ollama.
+5. Unknown cases retain the deterministic fallback.
+
+Each decision records its rule, explanation, and deterministic confidence level
+(`high`, `medium`, or `low`). Low-confidence routes still execute the selected
+planner; Hybrid does not invoke another router, run both planners, or silently
+change strategies.
 
 ```bash
 npm run benchmark:qa -- --planner hybrid --runs 3
@@ -321,13 +335,27 @@ planner, routing rule, reason, availability failure, and fallback status remain
 visible in run metadata. This prevents a deterministic fallback from being
 counted as an Ollama execution.
 
-Reports that include Hybrid add a separate **Benchmark V4 - Hybrid Routing
-Evaluation** section with routing distribution, routing-accuracy proxy,
-fallback and availability counts, rule usage, Hybrid performance, and measured
-tradeoff interpretation. V2 controlled reliability and V3 generalization
-metrics remain separate. The routing-accuracy proxy measures agreement with
-evaluator-owned category recommendations, not whether a planner was empirically
-optimal on every run; those recommendations are never provided to the router.
+Reports preserve the existing V4 section and add **Benchmark V4.1 - Hybrid
+Routing Refinement**. Diagnostics include routing distribution, a confusion
+matrix, agreement by scenario and category, rule and confidence performance,
+historical alternative-planner comparisons, and routing-regret estimates. A
+route has material estimated regret when the alternative planner's measured
+success on the same scenario is at least 20 percentage points higher. Agreement
+and regret are evaluator-side diagnostic proxies, not proof of causal
+optimality, and evaluator recommendations are attached only after execution.
+V2 controlled and V3 generalization metrics remain backward compatible.
+
+The latest V2 robustness snapshot used 180 executions, with 60 per planner.
+Hybrid V2 improved over the persisted V1 baseline on hidden discovery (20.0%
+versus 15.0%), ambiguous goals (77.5% versus 37.5%), recovery (61.1% versus
+38.3%), exploration efficiency (0.521 versus 0.454), state revisits (33.7%
+versus 44.7%), and expected-outcome stability (58.3% versus 30.0%). However,
+all current generalization scenarios matched Ollama-oriented rules, so Hybrid
+averaged 7.14 seconds versus 6.20 seconds for pure Ollama and 1.20 seconds for
+deterministic. Controlled Hybrid remained near deterministic at 1.16 seconds
+versus 1.04 seconds. The result supports V2's quality improvement but not a
+generalization-latency or routing-regret improvement; local model variability
+and the current scenario mix remain important limitations.
 
 Scenarios are labeled by meaningful execution demands:
 

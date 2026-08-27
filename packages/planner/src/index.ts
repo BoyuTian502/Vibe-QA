@@ -7,6 +7,7 @@ export {
 } from "./hybrid-task-router.js";
 export type {
   HybridRoutingDecision,
+  HybridRoutingConfidence,
   HybridRoutingRuleId,
   HybridTaskMetadata,
   HybridTaskMode,

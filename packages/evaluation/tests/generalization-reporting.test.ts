@@ -131,14 +131,16 @@ describe("generalization robustness reporting", () => {
           goalCompleted: true,
           routing: {
             requestedStrategy: "hybrid",
-            selectedPlanner: "deterministic",
-            executedPlanner: "deterministic",
-            routingRule: "ambiguous-semantic-default",
-            routingReason: "Ambiguous goals use the conservative default.",
+            selectedPlanner: "ollama",
+            executedPlanner: "ollama",
+            routingRule: "ambiguous-semantic-ollama",
+            routingReason: "Ambiguous goals use semantic planning.",
+            routerVersion: "v2",
+            routingConfidence: "low",
             fallback: false,
             fallbackReason: null,
-            recommendedPlanner: "deterministic",
-            matchedRecommendation: true
+            recommendedPlanner: null,
+            matchedRecommendation: null
           }
         })
     }).run([scenario("hybrid")], {
@@ -148,9 +150,12 @@ describe("generalization robustness reporting", () => {
     const report = formatGeneralizationMarkdownReport(result);
 
     expect(report).toContain("Benchmark V4 - Hybrid Routing Evaluation");
-    expect(report).toContain("Selected deterministic: 100.0% (1)");
+    expect(report).toContain("Selected Ollama: 100.0% (1)");
     expect(report).toContain("Routing accuracy proxy: 100.0% (1/1)");
     expect(report).toContain("Ambiguous goal completion: 100.0%");
+    expect(report).toContain("Benchmark V4.1 - Hybrid Routing Refinement");
+    expect(report).toContain("Routing Confusion Matrix");
+    expect(report).toContain("Why Hybrid V1 Failed");
   });
 });
 
@@ -194,10 +199,12 @@ function scenario(
       explicitlyExploratory: false,
       hiddenIssueDiscoveryRequested: false,
       recoveryRequired: category === "recovery",
+      sameUrlStateReasoning: false,
       semanticGoalAmbiguous: category === "ambiguous_goal"
     },
     evaluatorOnly: {
-      recommendedPlanner: category === "recovery" ? "ollama" : "deterministic",
+      recommendedPlanner: "ollama",
+      recommendedPlannerCategory: "ollama-preferred",
       expectedBugIds: [],
       bugSignals: [],
       goalState: { textIncludes: "done" },

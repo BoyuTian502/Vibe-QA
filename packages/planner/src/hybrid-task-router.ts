@@ -2,12 +2,17 @@ export type RoutedPlanner = "deterministic" | "ollama";
 
 export type HybridTaskMode = "functional" | "exploratory" | "regression";
 
+export type HybridRoutingConfidence = "high" | "medium" | "low";
+
 export type HybridRoutingRuleId =
   | "regression-controlled"
   | "functional-known-workflow"
   | "explicit-exploration"
   | "hidden-issue-discovery"
   | "recovery-without-known-path"
+  | "same-url-state-reasoning"
+  | "ambiguous-semantic-ollama"
+  // Retained for compatibility with persisted Hybrid V1 routing records.
   | "ambiguous-semantic-default"
   | "conservative-default";
 
@@ -19,6 +24,7 @@ export interface HybridTaskMetadata {
   explicitlyExploratory?: boolean;
   hiddenIssueDiscoveryRequested?: boolean;
   recoveryRequired?: boolean;
+  sameUrlStateReasoning?: boolean;
   semanticGoalAmbiguous?: boolean;
   maxSteps?: number;
   authenticationRequired?: boolean;
@@ -28,6 +34,7 @@ export interface HybridRoutingDecision {
   planner: RoutedPlanner;
   ruleId: HybridRoutingRuleId;
   reason: string;
+  confidence: HybridRoutingConfidence;
 }
 
 export class HybridTaskRouter {
@@ -36,7 +43,8 @@ export class HybridTaskRouter {
       return decision(
         "deterministic",
         "regression-controlled",
-        "Controlled regression workflows favor deterministic speed and repeatability."
+        "Controlled regression workflows favor deterministic speed and repeatability.",
+        "high"
       );
     }
 
@@ -48,15 +56,8 @@ export class HybridTaskRouter {
       return decision(
         "deterministic",
         "functional-known-workflow",
-        "The functional task provides an expected outcome and a known workflow."
-      );
-    }
-
-    if (task.mode === "exploratory" || task.explicitlyExploratory === true) {
-      return decision(
-        "ollama",
-        "explicit-exploration",
-        "The task explicitly requests autonomous exploration."
+        "The functional task provides an expected outcome and a known workflow.",
+        "high"
       );
     }
 
@@ -67,7 +68,17 @@ export class HybridTaskRouter {
       return decision(
         "ollama",
         "hidden-issue-discovery",
-        "The task requests discovery of hidden, broken, or unexpected behavior."
+        "The task requests discovery of hidden, broken, or unexpected behavior.",
+        "high"
+      );
+    }
+
+    if (task.mode === "exploratory" || task.explicitlyExploratory === true) {
+      return decision(
+        "ollama",
+        "explicit-exploration",
+        "The task explicitly requests autonomous exploration.",
+        "high"
       );
     }
 
@@ -75,22 +86,34 @@ export class HybridTaskRouter {
       return decision(
         "ollama",
         "recovery-without-known-path",
-        "The task requires recovery or exploration without a predefined path."
+        "The task requires recovery or exploration without a predefined path.",
+        "medium"
+      );
+    }
+
+    if (task.sameUrlStateReasoning === true) {
+      return decision(
+        "ollama",
+        "same-url-state-reasoning",
+        "The task requires semantic reasoning about a meaningful state change without relying on URL navigation.",
+        "medium"
       );
     }
 
     if (task.semanticGoalAmbiguous === true) {
       return decision(
-        "deterministic",
-        "ambiguous-semantic-default",
-        "Hybrid V1 conservatively routes ambiguous non-exploratory goals to deterministic execution."
+        "ollama",
+        "ambiguous-semantic-ollama",
+        "Hybrid V2 routes ambiguous goals without an explicit workflow to semantic planning.",
+        "low"
       );
     }
 
     return decision(
       "deterministic",
       "conservative-default",
-      "No exploration-specific rule applies, so Hybrid V1 uses the deterministic default."
+      "No exploration-specific rule applies, so Hybrid V2 uses the deterministic default.",
+      "low"
     );
   }
 }
@@ -137,7 +160,8 @@ export function hasHiddenIssueDiscoveryIntent(objective: string): boolean {
 function decision(
   planner: RoutedPlanner,
   ruleId: HybridRoutingRuleId,
-  reason: string
+  reason: string,
+  confidence: HybridRoutingConfidence
 ): HybridRoutingDecision {
-  return Object.freeze({ planner, ruleId, reason });
+  return Object.freeze({ planner, ruleId, reason, confidence });
 }

@@ -20,6 +20,7 @@ export function createGeneralizationScenarios(
       routingHints: routingHints({ hiddenIssueDiscoveryRequested: true }),
       evaluatorOnly: {
         recommendedPlanner: "ollama",
+        recommendedPlannerCategory: "ollama-preferred",
         expectedBugIds: ["BUG-BENCH-005"],
         bugSignals: [
           {
@@ -47,6 +48,7 @@ export function createGeneralizationScenarios(
       routingHints: routingHints({ hiddenIssueDiscoveryRequested: true }),
       evaluatorOnly: {
         recommendedPlanner: "ollama",
+        recommendedPlannerCategory: "ollama-preferred",
         expectedBugIds: ["BUG-BENCH-002"],
         bugSignals: [
           {
@@ -78,7 +80,8 @@ export function createGeneralizationScenarios(
       credentialsRequirement: "benchmark-account",
       routingHints: routingHints({ semanticGoalAmbiguous: true }),
       evaluatorOnly: {
-        recommendedPlanner: "deterministic",
+        recommendedPlanner: "ollama",
+        recommendedPlannerCategory: "ollama-preferred",
         expectedBugIds: [],
         bugSignals: [],
         goalState: { urlPath: "/settings", textIncludes: "Workspace settings" },
@@ -100,7 +103,8 @@ export function createGeneralizationScenarios(
       credentialsRequirement: "benchmark-account",
       routingHints: routingHints({ semanticGoalAmbiguous: true }),
       evaluatorOnly: {
-        recommendedPlanner: "deterministic",
+        recommendedPlanner: "ollama",
+        recommendedPlannerCategory: "ollama-preferred",
         expectedBugIds: [],
         bugSignals: [],
         goalState: { urlPath: "/projects/proj-alpha", textIncludes: "Project detail" },
@@ -120,9 +124,10 @@ export function createGeneralizationScenarios(
         "Distinguish a meaningful dashboard state transition that does not change the URL.",
       maxSteps: 8,
       credentialsRequirement: "benchmark-account",
-      routingHints: routingHints(),
+      routingHints: routingHints({ sameUrlStateReasoning: true }),
       evaluatorOnly: {
-        recommendedPlanner: "deterministic",
+        recommendedPlanner: "ollama",
+        recommendedPlannerCategory: "ollama-preferred",
         expectedBugIds: [],
         bugSignals: [],
         goalState: {
@@ -148,6 +153,7 @@ export function createGeneralizationScenarios(
       routingHints: routingHints({ recoveryRequired: true }),
       evaluatorOnly: {
         recommendedPlanner: "ollama",
+        recommendedPlannerCategory: "ollama-preferred",
         expectedBugIds: [],
         bugSignals: [],
         goalState: {
@@ -171,6 +177,7 @@ function routingHints(
     explicitlyExploratory: false,
     hiddenIssueDiscoveryRequested: false,
     recoveryRequired: false,
+    sameUrlStateReasoning: false,
     semanticGoalAmbiguous: false,
     ...overrides
   };

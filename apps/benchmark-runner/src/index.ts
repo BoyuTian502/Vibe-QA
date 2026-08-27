@@ -205,7 +205,7 @@ function plannerModels(
 ): Partial<Record<BenchmarkPlanner, string>> {
   return {
     ...(planners.includes("ollama") ? { ollama: OLLAMA_MODEL } : {}),
-    ...(planners.includes("hybrid") ? { hybrid: "rule-based-v1" } : {})
+    ...(planners.includes("hybrid") ? { hybrid: "rule-based-v2" } : {})
   };
 }
 

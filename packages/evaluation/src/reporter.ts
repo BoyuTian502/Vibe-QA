@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { formatHybridDiagnosticsMarkdown } from "./hybrid-diagnostics-reporter.js";
 import type {
   BenchmarkPerformanceMetrics,
   BenchmarkSuiteResult,
@@ -44,7 +45,8 @@ export async function writeBenchmarkReport(
         suiteId: result.suiteId,
         generatedAt: result.generatedAt,
         planners: result.metrics.plannerPerformance,
-        hybridRouting: result.metrics.hybridRouting
+        hybridRouting: result.metrics.hybridRouting,
+        hybridDiagnostics: result.metrics.hybridDiagnostics
       })
     );
   }
@@ -214,6 +216,9 @@ export function formatBenchmarkMarkdownReport(result: BenchmarkSuiteResult): str
           "",
           ...controlledHybridInterpretation(result).map((line) => `- ${line}`)
         ]
+      : []),
+    ...(metrics.hybridDiagnostics
+      ? ["", formatHybridDiagnosticsMarkdown(metrics.hybridDiagnostics)]
       : []),
     "",
     "## Limitations",

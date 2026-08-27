@@ -7,6 +7,7 @@ import type {
 export function aggregateHybridRoutingMetrics(
   runs: readonly {
     planner: string;
+    classification?: string;
     routing?: PlannerRoutingMetadata | null;
   }[]
 ): HybridRoutingMetrics | null {
@@ -29,6 +30,12 @@ export function aggregateHybridRoutingMetrics(
   const accuracyRuns = hybridRuns.filter(
     (run) => run.routing.matchedRecommendation !== null
   );
+  const lowConfidenceRuns = hybridRuns.filter(
+    (run) => run.routing.routingConfidence === "low"
+  );
+  const lowConfidenceSuccessfulRuns = lowConfidenceRuns.filter((run) =>
+    isSuccessfulClassification(run.classification)
+  ).length;
 
   return {
     totalHybridRuns: hybridRuns.length,
@@ -55,8 +62,31 @@ export function aggregateHybridRoutingMetrics(
       accuracyRuns.length
     ),
     routingRuleCounts: countValues(hybridRuns.map((run) => run.routing.routingRule)),
-    routingReasonCounts: countValues(hybridRuns.map((run) => run.routing.routingReason))
+    routingReasonCounts: countValues(
+      hybridRuns.map((run) => run.routing.routingReason)
+    ),
+    confidenceCounts: {
+      high: hybridRuns.filter((run) => run.routing.routingConfidence === "high").length,
+      medium: hybridRuns.filter((run) => run.routing.routingConfidence === "medium")
+        .length,
+      low: lowConfidenceRuns.length
+    },
+    lowConfidenceRuns: lowConfidenceRuns.length,
+    lowConfidenceSuccessfulRuns,
+    lowConfidenceSuccessRate: rate(
+      lowConfidenceSuccessfulRuns,
+      lowConfidenceRuns.length
+    )
   };
+}
+
+function isSuccessfulClassification(classification: string | undefined): boolean {
+  return (
+    classification === "PASS" ||
+    classification === "EXPECTED_BUG_FOUND" ||
+    classification === "HIDDEN_BUG_FOUND" ||
+    classification === "GOAL_COMPLETED"
+  );
 }
 
 function plannerCounts(

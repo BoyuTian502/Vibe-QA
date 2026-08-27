@@ -1,4 +1,5 @@
 import { describeDistribution } from "./metrics.js";
+import { aggregateHybridRoutingDiagnostics } from "./hybrid-diagnostics.js";
 import { aggregateHybridRoutingMetrics } from "./hybrid-metrics.js";
 import type {
   GeneralizationMetrics,
@@ -53,7 +54,28 @@ export function aggregateGeneralizationMetrics(
         ...aggregatePerformance(difficultyRuns)
       })
     ),
-    hybridRouting: aggregateHybridRoutingMetrics(runs)
+    hybridRouting: aggregateHybridRoutingMetrics(runs),
+    hybridDiagnostics: aggregateHybridRoutingDiagnostics(
+      runs.map((run) => ({
+        planner: run.planner,
+        scenarioId: run.scenarioId,
+        category: run.category,
+        taskMode: run.routing?.taskMetadata?.mode ?? "functional",
+        classification: run.classification,
+        taskSuccess: isSuccessfulRun(run),
+        hiddenBugDiscovered:
+          run.expectedBugIds.length === 0
+            ? null
+            : run.expectedBugIds.every((bugId) => run.detectedBugIds.includes(bugId)),
+        recoverySuccess: run.recoveryRequired ? run.recoverySucceeded : null,
+        durationMs: run.durationMs,
+        steps: run.actions.length,
+        explorationEfficiency: rate(run.usefulNewStates, run.actions.length),
+        revisitRate: rate(run.revisitedStates, run.observations.length),
+        detourRate: rate(run.detourActions, run.actions.length),
+        routing: run.routing
+      }))
+    )
   };
 }
 

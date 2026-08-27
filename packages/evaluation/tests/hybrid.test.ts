@@ -85,6 +85,8 @@ describe("hybrid benchmark metrics", () => {
     expect(report).toContain("Selected deterministic: 100.0% (1)");
     expect(report).toContain("Routing accuracy proxy: 100.0% (1/1)");
     expect(report).toContain("Controlled task success: 100.0%");
+    expect(report).toContain("Benchmark V4.1 - Hybrid Routing Refinement");
+    expect(report).toContain("Rule-Level Performance");
   });
 });
 

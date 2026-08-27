@@ -16,7 +16,9 @@ import type {
 import type {
   BenchmarkApplicationConfiguration,
   BenchmarkDifficulty,
-  BenchmarkPlanner
+  BenchmarkPlanner,
+  PlannerRoutingMetadata,
+  RoutingRecommendationCategory
 } from "./types.js";
 
 export interface GeneralizationRunnerOptions {
@@ -217,6 +219,10 @@ function createRun(
 
   return {
     ...execution,
+    routing: annotateRoutingRecommendation(
+      execution.routing,
+      scenario.evaluatorOnly.recommendedPlannerCategory
+    ),
     id: `${planner}-${scenario.id}-${repetition}-${id}`,
     scenarioId: scenario.id,
     scenarioName: scenario.name,
@@ -234,6 +240,30 @@ function createRun(
     revisitedStates,
     recoveryRequired: detourActions > 0,
     recoverySucceeded: detourActions > 0 && successful
+  };
+}
+
+function annotateRoutingRecommendation(
+  routing: PlannerRoutingMetadata | null | undefined,
+  category: RoutingRecommendationCategory
+): PlannerRoutingMetadata | null {
+  if (!routing) {
+    return null;
+  }
+  const recommendedPlanner =
+    category === "deterministic-preferred"
+      ? "deterministic"
+      : category === "ollama-preferred"
+        ? "ollama"
+        : null;
+  return {
+    ...routing,
+    recommendedPlanner,
+    recommendedCategory: category,
+    matchedRecommendation:
+      recommendedPlanner === null
+        ? null
+        : routing.selectedPlanner === recommendedPlanner
   };
 }
 

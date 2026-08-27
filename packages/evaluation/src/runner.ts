@@ -12,7 +12,9 @@ import type {
   BenchmarkRunOptions,
   BenchmarkScenario,
   BenchmarkScenarioExecutor,
-  BenchmarkSuiteResult
+  BenchmarkSuiteResult,
+  PlannerRoutingMetadata,
+  RoutingRecommendationCategory
 } from "./types.js";
 
 export interface BenchmarkRunnerOptions {
@@ -82,6 +84,7 @@ export class BenchmarkRunner {
               repetition,
               planner
             );
+            const classification = classifyBenchmarkRun(scenario, execution);
             runs.push({
               id: `${planner}-${scenario.id}-${repetition}-${this.idFactory()}`,
               scenarioId: scenario.id,
@@ -92,7 +95,7 @@ export class BenchmarkRunner {
               planner,
               modelName: this.plannerModels[planner] ?? null,
               startedAt,
-              classification: classifyBenchmarkRun(scenario, execution),
+              classification,
               expectedOutcomeMet: execution.expectedOutcomeMet,
               expectedBugId: scenario.expectedBugId,
               detectedBugIds: [...execution.detectedBugIds],
@@ -102,7 +105,10 @@ export class BenchmarkRunner {
               durationMs: execution.durationMs,
               safetyEvents: { ...execution.safetyEvents },
               exploration: execution.exploration ? { ...execution.exploration } : null,
-              routing: execution.routing ? { ...execution.routing } : null
+              routing: annotateRoutingRecommendation(
+                execution.routing,
+                controlledRecommendation(scenario)
+              )
             });
           } catch (error) {
             runs.push({
@@ -159,6 +165,36 @@ export class BenchmarkRunner {
       metrics: aggregateBenchmarkMetrics(runs)
     };
   }
+}
+
+function controlledRecommendation(
+  scenario: BenchmarkScenario
+): RoutingRecommendationCategory {
+  return scenario.mode === "exploratory"
+    ? "ollama-preferred"
+    : "deterministic-preferred";
+}
+
+function annotateRoutingRecommendation(
+  routing: PlannerRoutingMetadata | null | undefined,
+  category: RoutingRecommendationCategory
+): PlannerRoutingMetadata | null {
+  if (!routing) {
+    return null;
+  }
+  const recommendedPlanner =
+    category === "mixed" ? null : category.replace("-preferred", "");
+  const validPlanner =
+    recommendedPlanner === "deterministic" || recommendedPlanner === "ollama"
+      ? recommendedPlanner
+      : null;
+  return {
+    ...routing,
+    recommendedPlanner: validPlanner,
+    recommendedCategory: category,
+    matchedRecommendation:
+      validPlanner === null ? null : routing.selectedPlanner === validPlanner
+  };
 }
 
 function copyScenario(scenario: BenchmarkScenario): BenchmarkScenario {

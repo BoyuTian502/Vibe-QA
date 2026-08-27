@@ -172,10 +172,12 @@ function scenario(): GeneralizationScenario {
       explicitlyExploratory: false,
       hiddenIssueDiscoveryRequested: true,
       recoveryRequired: false,
+      sameUrlStateReasoning: false,
       semanticGoalAmbiguous: false
     },
     evaluatorOnly: {
       recommendedPlanner: "ollama",
+      recommendedPlannerCategory: "ollama-preferred",
       expectedBugIds: ["BUG-BENCH-999"],
       bugSignals: [
         {

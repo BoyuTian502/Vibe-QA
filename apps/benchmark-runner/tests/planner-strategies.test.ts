@@ -142,8 +142,11 @@ describe("benchmark planner configuration", () => {
       selectedPlanner: "deterministic",
       executedPlanner: "deterministic",
       routingRule: "functional-known-workflow",
+      routerVersion: "v2",
+      routingConfidence: "high",
       fallback: false,
-      matchedRecommendation: true
+      recommendedPlanner: null,
+      matchedRecommendation: null
     });
   });
 
@@ -165,6 +168,31 @@ describe("benchmark planner configuration", () => {
       selectedPlanner: "ollama",
       executedPlanner: null,
       fallback: false
+    });
+  });
+
+  it("keeps evaluator recommendations outside the router decision", async () => {
+    const strategy = new HybridBenchmarkPlannerStrategy(
+      new DeterministicBenchmarkPlannerStrategy(),
+      new OllamaBenchmarkPlannerStrategy(new RecordingClient('{"ready":true}'))
+    );
+    const task = {
+      mode: "functional" as const,
+      objective: "Verify the account overview.",
+      hasExpectedBehavior: false,
+      exactWorkflowKnown: false,
+      semanticGoalAmbiguous: false
+    };
+
+    const deterministicRecommendation = await strategy.select(task, "deterministic");
+    const ollamaRecommendation = await strategy.select(task, "ollama");
+
+    expect(deterministicRecommendation).toEqual(ollamaRecommendation);
+    expect(deterministicRecommendation.routing).toMatchObject({
+      selectedPlanner: "deterministic",
+      recommendedPlanner: null,
+      recommendedCategory: null,
+      matchedRecommendation: null
     });
   });
 

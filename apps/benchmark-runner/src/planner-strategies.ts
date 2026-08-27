@@ -9,7 +9,8 @@ import type { TestCase, TestStep } from "@vibeqa/test-engine";
 import type {
   BenchmarkPlanner,
   ExecutionPlanner,
-  PlannerRoutingMetadata
+  PlannerRoutingMetadata,
+  RoutingTaskMetadataSnapshot
 } from "@vibeqa/evaluation";
 
 import type { ExecutableBenchmarkScenario } from "./scenarios.js";
@@ -179,10 +180,7 @@ export class HybridBenchmarkPlannerStrategy implements BenchmarkPlannerStrategy 
   async prepare(
     scenario: ExecutableBenchmarkScenario
   ): Promise<PreparedBenchmarkScenario> {
-    const selection = await this.select(
-      benchmarkTaskMetadata(scenario),
-      recommendedPlannerForControlledScenario(scenario)
-    );
+    const selection = await this.select(benchmarkTaskMetadata(scenario));
     if (!selection.executedPlanner) {
       return {
         testCase: null,
@@ -203,31 +201,26 @@ export class HybridBenchmarkPlannerStrategy implements BenchmarkPlannerStrategy 
 
   async select(
     task: HybridTaskMetadata,
-    recommendedPlanner: ExecutionPlanner | null
+    _legacyRecommendation?: ExecutionPlanner | null
   ): Promise<HybridPlannerSelection> {
+    void _legacyRecommendation;
     const decision = this.router.route(task);
     if (decision.planner === "deterministic") {
-      return selection(decision, "deterministic", recommendedPlanner);
+      return selection(decision, task, "deterministic");
     }
 
     try {
       await this.ollama.verifyAvailability();
-      return selection(decision, "ollama", recommendedPlanner);
+      return selection(decision, task, "ollama");
     } catch (error) {
       if (this.allowDeterministicFallback) {
-        return selection(
-          decision,
-          "deterministic",
-          recommendedPlanner,
-          true,
-          "ollama-unavailable"
-        );
+        return selection(decision, task, "deterministic", true, "ollama-unavailable");
       }
       const cause = error instanceof Error ? error.message : "unknown error";
       return {
         selectedPlanner: decision.planner,
         executedPlanner: null,
-        routing: routingMetadata(decision, null, recommendedPlanner, false, null),
+        routing: routingMetadata(decision, task, null, false, null),
         infrastructureError: cause
       };
     }
@@ -245,43 +238,32 @@ function benchmarkTaskMetadata(
     explicitlyExploratory: scenario.mode === "exploratory",
     hiddenIssueDiscoveryRequested: false,
     recoveryRequired: false,
+    sameUrlStateReasoning: false,
     semanticGoalAmbiguous: false,
     maxSteps: scenario.maxSteps,
     authenticationRequired: scenario.credentialsRequirement !== "none"
   };
 }
 
-function recommendedPlannerForControlledScenario(
-  scenario: ExecutableBenchmarkScenario
-): ExecutionPlanner {
-  return scenario.mode === "exploratory" ? "ollama" : "deterministic";
-}
-
 function selection(
   decision: ReturnType<HybridTaskRouter["route"]>,
+  task: HybridTaskMetadata,
   executedPlanner: ExecutionPlanner,
-  recommendedPlanner: ExecutionPlanner | null,
   fallback = false,
   fallbackReason: "ollama-unavailable" | null = null
 ): HybridPlannerSelection {
   return {
     selectedPlanner: decision.planner,
     executedPlanner,
-    routing: routingMetadata(
-      decision,
-      executedPlanner,
-      recommendedPlanner,
-      fallback,
-      fallbackReason
-    ),
+    routing: routingMetadata(decision, task, executedPlanner, fallback, fallbackReason),
     infrastructureError: null
   };
 }
 
 function routingMetadata(
   decision: ReturnType<HybridTaskRouter["route"]>,
+  task: HybridTaskMetadata,
   executedPlanner: ExecutionPlanner | null,
-  recommendedPlanner: ExecutionPlanner | null,
   fallback: boolean,
   fallbackReason: "ollama-unavailable" | null
 ): PlannerRoutingMetadata {
@@ -291,11 +273,29 @@ function routingMetadata(
     executedPlanner,
     routingRule: decision.ruleId,
     routingReason: decision.reason,
+    routerVersion: "v2",
+    routingConfidence: decision.confidence,
+    taskMetadata: safeTaskMetadata(task),
     fallback,
     fallbackReason,
-    recommendedPlanner,
-    matchedRecommendation:
-      recommendedPlanner === null ? null : decision.planner === recommendedPlanner
+    recommendedPlanner: null,
+    recommendedCategory: null,
+    matchedRecommendation: null
+  };
+}
+
+function safeTaskMetadata(task: HybridTaskMetadata): RoutingTaskMetadataSnapshot {
+  return {
+    mode: task.mode,
+    hasExpectedBehavior: task.hasExpectedBehavior,
+    exactWorkflowKnown: task.exactWorkflowKnown,
+    explicitlyExploratory: task.explicitlyExploratory === true,
+    hiddenIssueDiscoveryRequested: task.hiddenIssueDiscoveryRequested === true,
+    recoveryRequired: task.recoveryRequired === true,
+    sameUrlStateReasoning: task.sameUrlStateReasoning === true,
+    semanticGoalAmbiguous: task.semanticGoalAmbiguous === true,
+    maxSteps: task.maxSteps ?? null,
+    authenticationRequired: task.authenticationRequired === true
   };
 }
 

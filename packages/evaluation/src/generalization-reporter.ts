@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { calculateLatencyRatio } from "./generalization-metrics.js";
+import { formatHybridDiagnosticsMarkdown } from "./hybrid-diagnostics-reporter.js";
 import type {
   GeneralizationPerformanceMetrics,
   GeneralizationPlannerMetrics,
@@ -55,6 +56,7 @@ export async function writeGeneralizationReport(
         planners: result.metrics.plannerPerformance,
         scenariosByPlanner: result.metrics.scenarioPlannerPerformance,
         hybridRouting: result.metrics.hybridRouting,
+        hybridDiagnostics: result.metrics.hybridDiagnostics,
         interpretation: generalizationInterpretation(result)
       })
     );
@@ -153,6 +155,16 @@ export function formatGeneralizationMarkdownReport(
           "#### Measured V4 Interpretation",
           "",
           ...generalizationHybridInterpretation(result).map((finding) => `- ${finding}`)
+        ]
+      : []),
+    ...(result.metrics.hybridDiagnostics
+      ? [
+          "",
+          formatHybridDiagnosticsMarkdown(result.metrics.hybridDiagnostics),
+          "",
+          "### Hybrid V1 vs Hybrid V2",
+          "",
+          "The persisted Hybrid V1 generalization baseline was 15.0% hidden discovery, 37.5% ambiguous-goal completion, 38.3% recovery, 0.454 exploration efficiency, 44.7% state revisits, 3.95s average duration, and 30.0% expected-outcome stability. These values are historical and were not rerun as V1 in this experiment."
         ]
       : []),
     "",

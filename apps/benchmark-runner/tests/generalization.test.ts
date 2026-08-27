@@ -192,7 +192,7 @@ describe("generalization benchmark runner", () => {
     ]);
   });
 
-  it("routes an ambiguous Hybrid scenario through deterministic execution", async () => {
+  it("routes an ambiguous Hybrid scenario through Ollama execution", async () => {
     const benchmark = await startBenchmarkServer({ port: 0 });
     const unavailableClient: LLMClient = {
       generate: async () => {
@@ -212,12 +212,14 @@ describe("generalization benchmark runner", () => {
       }).execute(scenario, 1, "hybrid");
 
       expect(execution.routing).toMatchObject({
-        selectedPlanner: "deterministic",
-        executedPlanner: "deterministic",
-        routingRule: "ambiguous-semantic-default",
-        matchedRecommendation: true
+        selectedPlanner: "ollama",
+        executedPlanner: null,
+        routingRule: "ambiguous-semantic-ollama",
+        routingConfidence: "low",
+        recommendedPlanner: null,
+        matchedRecommendation: null
       });
-      expect(execution.infrastructureError).toBeNull();
+      expect(execution.infrastructureError).toContain("Ollama planner unavailable");
     } finally {
       await benchmark.close();
     }
@@ -246,7 +248,7 @@ describe("generalization benchmark runner", () => {
         selectedPlanner: "ollama",
         executedPlanner: null,
         fallback: false,
-        matchedRecommendation: true
+        matchedRecommendation: null
       });
       expect(execution.infrastructureError).toContain("Ollama planner unavailable");
       expect(JSON.stringify(execution.routing)).not.toContain("BUG-BENCH");
