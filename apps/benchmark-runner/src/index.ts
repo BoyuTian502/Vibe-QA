@@ -180,6 +180,11 @@ async function runGeneralizationBenchmark(input: {
   console.log(`Runs per scenario: ${input.options.runs}`);
   console.log(`Selected scenarios: ${selectedCount}`);
   console.log(`Planner strategies: ${input.options.planners.join(", ")}\n`);
+  if (input.options.adaptiveDebugReplay) {
+    console.log(
+      `Adaptive diagnostic replay: ${input.options.adaptivePostEscalationStepBudget} post-escalation action(s)\n`
+    );
+  }
 
   const executor = new GeneralizationPlaywrightExecutor({
     benchmark: input.benchmark,
@@ -188,6 +193,9 @@ async function runGeneralizationBenchmark(input: {
       HybridBenchmarkPlannerStrategy | undefined,
     ollamaStrategy: input.strategies.ollama as
       OllamaBenchmarkPlannerStrategy | undefined,
+    adaptiveDebugReplay: input.options.adaptiveDebugReplay,
+    adaptivePostEscalationStepBudget:
+      input.options.adaptivePostEscalationStepBudget ?? undefined,
     onRunStart: (scenario, repetition, planner) => {
       completedRuns += 1;
       console.log(
@@ -202,7 +210,9 @@ async function runGeneralizationBenchmark(input: {
       name: "benchmark-saas-workspace",
       version: "0.0.0",
       configuration: "five-seeded-bugs-plus-generalization-states"
-    }
+    },
+    adaptiveDebugReplay: input.options.adaptiveDebugReplay,
+    adaptivePostEscalationStepBudget: input.options.adaptivePostEscalationStepBudget
   }).run(scenarios, {
     runsPerScenario: input.options.runs,
     scenarioIds: input.options.scenario ? [input.options.scenario] : undefined,

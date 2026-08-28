@@ -66,6 +66,30 @@ describe("benchmark planner configuration", () => {
     ).toEqual(["deterministic", "ollama", "hybrid", "adaptive"]);
   });
 
+  it("enables isolated Adaptive replay budgets without changing defaults", () => {
+    expect(parseBenchmarkCliOptions(["--planner", "adaptive"])).toMatchObject({
+      adaptiveDebugReplay: false,
+      adaptivePostEscalationStepBudget: null
+    });
+    expect(
+      parseBenchmarkCliOptions([
+        "--suite",
+        "generalization",
+        "--planner",
+        "adaptive",
+        "--adaptive-debug-replay",
+        "--post-escalation-steps",
+        "6"
+      ])
+    ).toMatchObject({
+      adaptiveDebugReplay: true,
+      adaptivePostEscalationStepBudget: 6
+    });
+    expect(() => parseBenchmarkCliOptions(["--post-escalation-steps", "3"])).toThrow(
+      "requires --adaptive-debug-replay"
+    );
+  });
+
   it("preserves scenario difficulty metadata", () => {
     const scenarios = createBenchmarkScenarios("http://benchmark.test");
 

@@ -171,6 +171,113 @@ describe("progressive escalation", () => {
       classifyEscalationUtility({ escalationOccurred: false, finalOutcome: true })
     ).toBe("NO_ESCALATION_NEEDED");
   });
+
+  it("creates a sanitized handoff snapshot with remaining budget", async () => {
+    const controller = new AdaptiveExecutionController({
+      deterministicClient: new SequenceClient([
+        action({ type: "click", selector: "#next" })
+      ]),
+      ollamaClient: new SequenceClient(["null"]),
+      verifyOllamaAvailability: async () => {},
+      maxSteps: 6
+    });
+    const current = observation("same password=secret-value BUG-BENCH-005");
+    const visibleElement = current.elements[0];
+    if (!visibleElement) throw new Error("Expected a visible fixture element.");
+    current.elements.push({
+      ...visibleElement,
+      id: "hidden",
+      selector: "#hidden-evaluator-target",
+      visible: false
+    });
+    const sensitiveAction: BrowserAction = {
+      type: "type",
+      selector: "#password",
+      value: "secret-value"
+    };
+    await controller.generate(prompt(current, []));
+    await controller.generate(
+      diagnosticPrompt(
+        current,
+        [sensitiveAction],
+        ["BUG-BENCH-005 password=secret-value"]
+      )
+    );
+
+    const snapshot = controller.getMetadata(1).handoffSnapshot;
+    expect(snapshot).toMatchObject({
+      remainingStepBudget: 5,
+      totalMaxSteps: 6,
+      priorDeterministicActions: [{ type: "type", target: "#password" }]
+    });
+    const serialized = JSON.stringify(snapshot);
+    expect(serialized).not.toContain("secret-value");
+    expect(serialized).not.toContain("BUG-BENCH-005");
+    expect(serialized).not.toContain("#hidden-evaluator-target");
+  });
+
+  it("caps post-escalation actions only in diagnostic replay mode", async () => {
+    const ollama = new SequenceClient([
+      action({ type: "click", selector: "#next" }),
+      action({ type: "click", selector: "#next" })
+    ]);
+    const controller = new AdaptiveExecutionController({
+      deterministicClient: new SequenceClient([
+        action({ type: "click", selector: "#next" })
+      ]),
+      ollamaClient: ollama,
+      verifyOllamaAvailability: async () => {},
+      maxSteps: 10,
+      diagnosticPostEscalationStepBudget: 1
+    });
+    const current = observation("same");
+    await controller.generate(prompt(current, []));
+    await controller.generate(prompt(current, [{ type: "click", selector: "#next" }]));
+    const stopped = await controller.generate(
+      prompt(current, [
+        { type: "click", selector: "#next" },
+        { type: "click", selector: "#next" }
+      ])
+    );
+
+    expect(stopped).toBe("null");
+    expect(ollama.prompts).toHaveLength(1);
+    expect(controller.getMetadata(2)).toMatchObject({
+      diagnosticReplay: true,
+      diagnosticPostEscalationStepBudget: 1,
+      diagnosticBudgetExhausted: true
+    });
+  });
+
+  it("keeps production execution uncapped by default", async () => {
+    const controller = new AdaptiveExecutionController({
+      deterministicClient: new SequenceClient([
+        action({ type: "click", selector: "#next" })
+      ]),
+      ollamaClient: new SequenceClient([
+        action({ type: "click", selector: "#next" }),
+        "null"
+      ]),
+      verifyOllamaAvailability: async () => {},
+      maxSteps: 10
+    });
+    const current = observation("same");
+    await controller.generate(prompt(current, []));
+    await controller.generate(prompt(current, [{ type: "click", selector: "#next" }]));
+    await controller.generate(
+      prompt(current, [
+        { type: "click", selector: "#next" },
+        { type: "click", selector: "#next" }
+      ])
+    );
+
+    expect(controller.getMetadata(2)).toMatchObject({
+      diagnosticReplay: false,
+      diagnosticPostEscalationStepBudget: null,
+      diagnosticBudgetExhausted: false,
+      ollamaInvocationCount: 2
+    });
+  });
 });
 
 class SequenceClient implements LLMClient {
@@ -193,6 +300,13 @@ function progressInput(
   return {
     progressed: false,
     reasons: [],
+    currentFingerprint: "state",
+    previousMatchingFingerprint: null,
+    actionsSincePreviousMatch: [],
+    urlChanged: false,
+    visibleTextChanged: false,
+    interactiveElementsChanged: false,
+    evaluatorReportedProgress: null,
     repeatedStateCount: 0,
     noProgressCount: 0,
     failedActionCount: 0,
@@ -200,6 +314,20 @@ function progressInput(
     deterministicSteps: 0,
     ...overrides
   };
+}
+
+function diagnosticPrompt(
+  value: Observation,
+  actions: readonly BrowserAction[],
+  bugs: readonly string[]
+): string {
+  return [
+    "You are VibeQA.",
+    "Goal: Explore safely",
+    `Current observation: ${JSON.stringify(value)}`,
+    `Previous actions: ${JSON.stringify(actions)}`,
+    `Discovered bugs: ${JSON.stringify(bugs)}`
+  ].join("\n");
 }
 
 function action(value: BrowserAction): string {

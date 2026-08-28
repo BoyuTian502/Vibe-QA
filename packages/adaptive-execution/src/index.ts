@@ -13,7 +13,12 @@ export {
 } from "./progress-evaluator.js";
 export { classifyEscalationUtility } from "./utility.js";
 export type {
+  AdaptiveActionSummary,
   AdaptiveExecutionMetadata,
+  AdaptiveHandoffSnapshot,
+  AdaptiveInteractiveElementSnapshot,
+  AdaptivePlannerDecision,
+  AdaptivePlannerDecisionOutcome,
   AdaptivePlannerPhase,
   AdaptiveProgressEvent,
   EscalationPolicyDecision,

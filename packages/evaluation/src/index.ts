@@ -14,6 +14,11 @@ export type { BenchmarkReportPaths } from "./reporter.js";
 export { BenchmarkRunner, filterBenchmarkScenarios } from "./runner.js";
 export { aggregateHybridRoutingMetrics } from "./hybrid-metrics.js";
 export { aggregateAdaptiveExecutionMetrics } from "./adaptive-metrics.js";
+export {
+  aggregateAdaptiveFailureAnalysis,
+  analyzeAdaptiveRun
+} from "./adaptive-failure-analysis.js";
+export type { AdaptiveRunDiagnosticInput } from "./adaptive-failure-analysis.js";
 export type { AdaptiveMetricSource } from "./adaptive-metrics.js";
 export {
   aggregateHybridRoutingDiagnostics,
@@ -25,6 +30,10 @@ export {
   formatAdaptiveExecutionMarkdown,
   formatAdaptiveExecutionSummary
 } from "./adaptive-reporter.js";
+export {
+  formatAdaptiveFailureAnalysisMarkdown,
+  formatAdaptiveFailureAnalysisSummary
+} from "./adaptive-failure-reporter.js";
 export type { BenchmarkRunnerOptions } from "./runner.js";
 export {
   aggregateGeneralizationMetrics,
@@ -51,6 +60,14 @@ export {
 } from "./generalization-runner.js";
 export type { GeneralizationRunnerOptions } from "./generalization-runner.js";
 export type {
+  AdaptiveEscalationFailureReason,
+  AdaptiveFailureAnalysisMetrics,
+  AdaptiveObservationSummary,
+  AdaptiveOpportunityLoss,
+  AdaptivePhaseTrace,
+  AdaptiveRunDiagnostics,
+  AdaptiveScenarioFailureMetrics,
+  AdaptiveTerminationReason,
   GeneralizationActionRecord,
   GeneralizationBugSignal,
   GeneralizationClassification,
@@ -74,6 +91,12 @@ export type {
   GeneralizationScenarioPlannerMetrics,
   GeneralizationScenarioSummary,
   GeneralizationSuiteResult,
+  OpportunityLossLevel,
+  PlannerDecisionDiagnostic,
+  PlannerDecisionOutcome,
+  PureVsEscalatedComparison,
+  RepeatedStateTriggerAudit,
+  RepeatedStateTriggerQuality,
   StepBudgetMetrics,
   WilsonConfidenceInterval
 } from "./generalization-types.js";

@@ -22,6 +22,13 @@ export interface ProgressiveEscalationPolicyConfig {
 export interface ProgressEvaluation {
   progressed: boolean;
   reasons: string[];
+  currentFingerprint: string;
+  previousMatchingFingerprint: string | null;
+  actionsSincePreviousMatch: AdaptiveActionSummary[];
+  urlChanged: boolean;
+  visibleTextChanged: boolean;
+  interactiveElementsChanged: boolean;
+  evaluatorReportedProgress: boolean | null;
   repeatedStateCount: number;
   noProgressCount: number;
   failedActionCount: number;
@@ -52,11 +59,79 @@ export interface AdaptiveProgressEvent {
   step: number;
   progressed: boolean;
   reasons: string[];
+  currentFingerprint: string;
+  previousMatchingFingerprint: string | null;
+  actionsSincePreviousMatch: AdaptiveActionSummary[];
+  urlChanged: boolean;
+  visibleTextChanged: boolean;
+  interactiveElementsChanged: boolean;
+  evaluatorReportedProgress: boolean | null;
   repeatedStateCount: number;
   noProgressCount: number;
   failedActionCount: number;
   evaluationFailureCount: number;
   signals: EscalationSignal[];
+}
+
+export interface AdaptiveActionSummary {
+  type: BrowserAction["type"];
+  target: string | null;
+}
+
+export interface AdaptiveInteractiveElementSnapshot {
+  tagName: string;
+  role: string | null;
+  accessibleName: string | null;
+  text: string;
+  selector: string;
+  href: string | null;
+  enabled: boolean;
+  editable: boolean;
+}
+
+export interface AdaptiveHandoffSnapshot {
+  goal: string;
+  currentUrl: string;
+  pageTitle: string;
+  visibleTextSummary: string;
+  interactiveElements: AdaptiveInteractiveElementSnapshot[];
+  accessibility: Observation["accessibility"];
+  pageFingerprint: string;
+  priorDeterministicActions: AdaptiveActionSummary[];
+  failedOrNoProgressActions: AdaptiveActionSummary[];
+  discoveredBugs: string[];
+  progressHistory: AdaptiveProgressEvent[];
+  escalationSignals: EscalationSignal[];
+  escalationReason: string;
+  totalMaxSteps: number | null;
+  remainingStepBudget: number | null;
+  evaluatorStatus: {
+    progressed: boolean;
+    reasons: string[];
+  };
+  memorySummary: {
+    actionCount: number;
+    discoveredBugCount: number;
+    recentActionTypes: BrowserAction["type"][];
+  };
+  promptCharacterCount: number;
+  actionHistoryCharacterCount: number;
+}
+
+export type AdaptivePlannerDecisionOutcome =
+  "valid_action" | "null_action" | "diagnostic_budget_stop" | "generation_error";
+
+export interface AdaptivePlannerDecision {
+  phase: AdaptivePlannerPhase;
+  invocation: number;
+  outcome: AdaptivePlannerDecisionOutcome;
+  action: AdaptiveActionSummary | null;
+  promptCharacterCount: number;
+  responseCharacterCount: number;
+  actionHistoryCount: number;
+  pageFingerprint: string;
+  durationMs: number;
+  error: string | null;
 }
 
 export interface AdaptiveExecutionMetadata {
@@ -81,6 +156,13 @@ export interface AdaptiveExecutionMetadata {
   finalOutcome: boolean | null;
   progressEvents: AdaptiveProgressEvent[];
   escalationFailure: string | null;
+  maxSteps: number | null;
+  remainingStepBudgetAtHandoff: number | null;
+  handoffSnapshot: AdaptiveHandoffSnapshot | null;
+  plannerDecisions: AdaptivePlannerDecision[];
+  diagnosticReplay: boolean;
+  diagnosticPostEscalationStepBudget: number | null;
+  diagnosticBudgetExhausted: boolean;
 }
 
 export type EscalationUtility =

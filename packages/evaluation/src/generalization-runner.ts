@@ -27,6 +27,8 @@ export interface GeneralizationRunnerOptions {
   gitCommitSha?: string | null;
   plannerModels?: Partial<Record<BenchmarkPlanner, string>>;
   benchmarkApplication?: BenchmarkApplicationConfiguration;
+  adaptiveDebugReplay?: boolean;
+  adaptivePostEscalationStepBudget?: number | null;
 }
 
 const DEFAULT_APPLICATION: BenchmarkApplicationConfiguration = {
@@ -41,6 +43,8 @@ export class GeneralizationRunner {
   private readonly gitCommitSha: string | null;
   private readonly plannerModels: Partial<Record<BenchmarkPlanner, string>>;
   private readonly benchmarkApplication: BenchmarkApplicationConfiguration;
+  private readonly adaptiveDebugReplay: boolean;
+  private readonly adaptivePostEscalationStepBudget: number | null;
 
   constructor(
     private readonly executor: GeneralizationScenarioExecutor,
@@ -53,6 +57,9 @@ export class GeneralizationRunner {
     this.benchmarkApplication = {
       ...(options.benchmarkApplication ?? DEFAULT_APPLICATION)
     };
+    this.adaptiveDebugReplay = options.adaptiveDebugReplay ?? false;
+    this.adaptivePostEscalationStepBudget =
+      options.adaptivePostEscalationStepBudget ?? null;
   }
 
   async run(
@@ -120,7 +127,9 @@ export class GeneralizationRunner {
       browserIsolation: "fresh-context-per-run",
       gitCommitSha: this.gitCommitSha,
       benchmarkApplication: { ...this.benchmarkApplication },
-      randomSeed: null
+      randomSeed: null,
+      adaptiveDebugReplay: this.adaptiveDebugReplay,
+      adaptivePostEscalationStepBudget: this.adaptivePostEscalationStepBudget
     };
 
     return {

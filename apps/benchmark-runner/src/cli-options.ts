@@ -12,6 +12,8 @@ export interface BenchmarkCliOptions {
   mode?: BenchmarkMode;
   difficulty?: BenchmarkDifficulty;
   planners: BenchmarkPlanner[];
+  adaptiveDebugReplay: boolean;
+  adaptivePostEscalationStepBudget: number | null;
 }
 
 interface RawCliOptions {
@@ -22,6 +24,8 @@ interface RawCliOptions {
   difficulty?: BenchmarkDifficulty;
   planner: BenchmarkPlanner;
   compare?: BenchmarkPlanner[];
+  adaptiveDebugReplay?: boolean;
+  postEscalationSteps?: number;
 }
 
 export function parseBenchmarkCliOptions(
@@ -59,17 +63,46 @@ export function parseBenchmarkCliOptions(
       "--compare <planners>",
       "run comma-separated planners in one session",
       parsePlannerList
+    )
+    .option(
+      "--adaptive-debug-replay",
+      "enable evaluator-only Adaptive post-escalation budget replay"
+    )
+    .option(
+      "--post-escalation-steps <count>",
+      "cap Adaptive debug replay to this many post-escalation actions",
+      parsePositiveInteger
     );
 
   program.parse([...argv], { from: "user" });
   const options = program.opts<RawCliOptions>();
+  const planners = options.compare ?? [options.planner];
+  if (options.adaptiveDebugReplay && !planners.includes("adaptive")) {
+    throw new InvalidArgumentError(
+      "adaptive debug replay requires the adaptive planner"
+    );
+  }
+  if (options.adaptiveDebugReplay && options.suite !== "generalization-v3") {
+    throw new InvalidArgumentError(
+      "adaptive debug replay requires the generalization suite"
+    );
+  }
+  if (options.postEscalationSteps && !options.adaptiveDebugReplay) {
+    throw new InvalidArgumentError(
+      "post-escalation-steps requires --adaptive-debug-replay"
+    );
+  }
   return {
     suite: options.suite,
     runs: options.runs,
     scenario: options.scenario,
     mode: options.mode,
     difficulty: options.difficulty,
-    planners: options.compare ?? [options.planner]
+    planners,
+    adaptiveDebugReplay: options.adaptiveDebugReplay ?? false,
+    adaptivePostEscalationStepBudget: options.adaptiveDebugReplay
+      ? (options.postEscalationSteps ?? 3)
+      : null
   };
 }
 

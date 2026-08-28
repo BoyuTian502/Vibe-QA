@@ -11,6 +11,12 @@ export class DeterministicProgressEvaluator {
   private failedActionCount = 0;
   private evaluationFailureCount = 0;
   private previousActionCount = 0;
+  private previousUrl = "";
+  private previousElementKeys = "";
+  private readonly matchingStates = new Map<
+    string,
+    { actionCount: number; fingerprint: string }
+  >();
 
   evaluate(input: RuntimeProgressInput): ProgressEvaluation {
     const fingerprint = pageFingerprint(input.observation);
@@ -21,6 +27,13 @@ export class DeterministicProgressEvaluator {
         .filter((element) => element.visible && element.enabled)
         .map(elementKey)
     );
+    const currentElementKeys = [...currentElements].sort().join("|");
+    const previousMatchingState = this.matchingStates.get(fingerprint);
+    const actionsSincePreviousMatch = previousMatchingState
+      ? input.actionHistory
+          .slice(previousMatchingState.actionCount)
+          .map(summarizeAction)
+      : [];
     const newElements = [...currentElements].filter(
       (element) => !this.discoveredElements.has(element)
     );
@@ -29,6 +42,7 @@ export class DeterministicProgressEvaluator {
     }
 
     const text = normalizeText(input.observation.textSample);
+    const normalizedUrl = normalizeUrl(input.observation.url);
     const newState =
       this.previousFingerprint !== null && fingerprint !== this.previousFingerprint;
     const newRelevantText = this.previousText.length > 0 && text !== this.previousText;
@@ -49,6 +63,11 @@ export class DeterministicProgressEvaluator {
       newElements.length > 0 ||
       meaningfulActionProgress ||
       input.evaluatorProgressed === true;
+    const urlChanged =
+      this.previousUrl.length > 0 && normalizedUrl !== this.previousUrl;
+    const interactiveElementsChanged =
+      this.previousElementKeys.length > 0 &&
+      currentElementKeys !== this.previousElementKeys;
 
     this.noProgressCount = progressed ? 0 : this.noProgressCount + 1;
     this.failedActionCount = actionFailed ? this.failedActionCount + 1 : 0;
@@ -57,7 +76,13 @@ export class DeterministicProgressEvaluator {
       : 0;
     this.previousFingerprint = fingerprint;
     this.previousText = text;
+    this.previousUrl = normalizedUrl;
+    this.previousElementKeys = currentElementKeys;
     this.previousActionCount = input.actionHistory.length;
+    this.matchingStates.set(fingerprint, {
+      actionCount: input.actionHistory.length,
+      fingerprint
+    });
 
     const reasons: string[] = [];
     if (firstObservation) reasons.push("initial-state");
@@ -73,12 +98,28 @@ export class DeterministicProgressEvaluator {
     return {
       progressed,
       reasons,
+      currentFingerprint: fingerprint,
+      previousMatchingFingerprint: previousMatchingState?.fingerprint ?? null,
+      actionsSincePreviousMatch,
+      urlChanged,
+      visibleTextChanged: newRelevantText,
+      interactiveElementsChanged,
+      evaluatorReportedProgress: input.evaluatorProgressed ?? null,
       repeatedStateCount: visits,
       noProgressCount: this.noProgressCount,
       failedActionCount: this.failedActionCount,
       evaluationFailureCount: this.evaluationFailureCount
     };
   }
+}
+
+function summarizeAction(action: RuntimeProgressInput["actionHistory"][number]): {
+  type: typeof action.type;
+  target: string | null;
+} {
+  if ("selector" in action) return { type: action.type, target: action.selector };
+  if ("url" in action) return { type: action.type, target: action.url };
+  return { type: action.type, target: null };
 }
 
 export function pageFingerprint(observation: Observation): string {

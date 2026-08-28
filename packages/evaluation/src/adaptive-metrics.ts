@@ -108,6 +108,13 @@ function wouldEscalate(
     (event) =>
       strategy.evaluate(
         {
+          currentFingerprint: event.currentFingerprint,
+          previousMatchingFingerprint: event.previousMatchingFingerprint,
+          actionsSincePreviousMatch: event.actionsSincePreviousMatch,
+          urlChanged: event.urlChanged,
+          visibleTextChanged: event.visibleTextChanged,
+          interactiveElementsChanged: event.interactiveElementsChanged,
+          evaluatorReportedProgress: event.evaluatorReportedProgress,
           progressed: event.progressed,
           reasons: event.reasons,
           repeatedStateCount: event.repeatedStateCount,

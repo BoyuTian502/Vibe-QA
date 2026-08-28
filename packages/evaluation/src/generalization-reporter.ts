@@ -6,6 +6,10 @@ import {
   formatAdaptiveExecutionMarkdown,
   formatAdaptiveExecutionSummary
 } from "./adaptive-reporter.js";
+import {
+  formatAdaptiveFailureAnalysisMarkdown,
+  formatAdaptiveFailureAnalysisSummary
+} from "./adaptive-failure-reporter.js";
 import { formatHybridDiagnosticsMarkdown } from "./hybrid-diagnostics-reporter.js";
 import type {
   GeneralizationPerformanceMetrics,
@@ -107,6 +111,9 @@ export function formatGeneralizationSummary(result: GeneralizationSuiteResult): 
     ...(metrics.adaptiveExecution
       ? ["", formatAdaptiveExecutionSummary(metrics.adaptiveExecution)]
       : []),
+    ...(metrics.adaptiveFailureAnalysis
+      ? ["", formatAdaptiveFailureAnalysisSummary(metrics.adaptiveFailureAnalysis)]
+      : []),
     ""
   ].join("\n");
 }
@@ -185,6 +192,9 @@ export function formatGeneralizationMarkdownReport(
           "",
           adaptivePerformanceMarkdown(result)
         ]
+      : []),
+    ...(result.metrics.adaptiveFailureAnalysis
+      ? ["", formatAdaptiveFailureAnalysisMarkdown(result)]
       : []),
     "",
     "### Per-Scenario Statistics",

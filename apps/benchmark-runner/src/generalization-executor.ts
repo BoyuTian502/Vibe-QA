@@ -14,7 +14,9 @@ import {
   type GeneralizationScenario,
   type GeneralizationScenarioExecutor,
   type PlannerRoutingMetadata,
+  type PlannerDecisionDiagnostic,
   type SafetyEventCounts,
+  analyzeAdaptiveRun,
   toGeneralizationPlannerInput
 } from "@vibeqa/evaluation";
 import {
@@ -61,6 +63,8 @@ export interface GeneralizationPlaywrightExecutorOptions {
   launchBrowser?: () => Promise<ClosableBrowserController>;
   safetyPolicy?: ActionSafetyPolicy;
   now?: () => number;
+  adaptiveDebugReplay?: boolean;
+  adaptivePostEscalationStepBudget?: number;
   onRunStart?: (
     scenario: GeneralizationScenario,
     repetition: number,
@@ -146,14 +150,26 @@ export class GeneralizationPlaywrightExecutor implements GeneralizationScenarioE
             }
             await this.options.ollamaStrategy.verifyAvailability();
           },
-          now: this.now
+          now: this.now,
+          maxSteps: adaptiveMaxSteps(
+            plannerInput.maxSteps,
+            this.options.adaptiveDebugReplay,
+            this.options.adaptivePostEscalationStepBudget
+          ),
+          diagnosticPostEscalationStepBudget: this.options.adaptiveDebugReplay
+            ? this.options.adaptivePostEscalationStepBudget
+            : undefined
         });
         await plannerBrowser.navigate(plannerInput.startUrl);
         const agent = new Agent({
           browser: plannerBrowser,
           llmClient: controller,
           safetyPolicy: this.safetyPolicy,
-          maxSteps: plannerInput.maxSteps
+          maxSteps: adaptiveMaxSteps(
+            plannerInput.maxSteps,
+            this.options.adaptiveDebugReplay,
+            this.options.adaptivePostEscalationStepBudget
+          )
         });
         await agent.run(plannerInput.goal);
         return evaluateAgentTrace(
@@ -164,7 +180,12 @@ export class GeneralizationPlaywrightExecutor implements GeneralizationScenarioE
           Math.max(0, this.now() - startedAt),
           ollamaClient.totalGenerationDurationMs,
           routing,
-          controller.getMetadata(agent.state.stepCount)
+          controller.getMetadata(agent.state.stepCount),
+          {
+            agentCompleted: agent.state.completed,
+            agentStepCount: agent.state.stepCount,
+            plannerDecisions: ollamaClient.getDecisionDiagnostics()
+          }
         );
       }
 
@@ -223,7 +244,13 @@ export class GeneralizationPlaywrightExecutor implements GeneralizationScenarioE
         agent.getPendingApproval() !== null,
         Math.max(0, this.now() - startedAt),
         agentClient.totalGenerationDurationMs,
-        routing
+        routing,
+        null,
+        {
+          agentCompleted: agent.state.completed,
+          agentStepCount: agent.state.stepCount,
+          plannerDecisions: agentClient.getDecisionDiagnostics()
+        }
       );
     } catch (error) {
       if (routing) {
@@ -336,6 +363,7 @@ class DeterministicGeneralizationClient implements LLMClient {
 
 export class GeneralizationAgentClient implements LLMClient {
   private generationDurationMs = 0;
+  private readonly diagnostics: PlannerDecisionDiagnostic[] = [];
 
   constructor(
     private readonly client: LLMClient,
@@ -346,7 +374,17 @@ export class GeneralizationAgentClient implements LLMClient {
     return this.generationDurationMs;
   }
 
+  getDecisionDiagnostics(): PlannerDecisionDiagnostic[] {
+    return this.diagnostics.map((item) => structuredClone(item));
+  }
+
   async generate(prompt: string): Promise<string> {
+    const observation = extractPromptObservation(prompt);
+    const actionHistory = extractPromptActions(prompt);
+    const promptCharacterCount = prompt.length;
+    const observationCharacterCount = JSON.stringify(observation).length;
+    const validationFailures: PlannerDecisionDiagnostic["validationFailures"] = [];
+    let responseCharacterCount = 0;
     const constrainedPrompt = [
       "Generalization benchmark action rules:",
       "- Use only a selector value that appears exactly in the current observation.",
@@ -370,16 +408,44 @@ export class GeneralizationAgentClient implements LLMClient {
       } finally {
         this.generationDurationMs += Math.max(0, this.now() - generationStartedAt);
       }
+      responseCharacterCount = response.length;
       try {
         const action = normalizeModelAction(response, prompt);
+        this.diagnostics.push({
+          outcome: action ? "valid_action" : "null_action",
+          promptCharacterCount,
+          observationCharacterCount,
+          actionHistoryCount: actionHistory.length,
+          responseCharacterCount,
+          attempts: attempt + 1,
+          validationFailures: [...validationFailures],
+          action: action ? summarizeAction(action) : null,
+          repeatedAction: action
+            ? actionHistory.some(
+                (previous) => actionIdentity(previous) === actionIdentity(action)
+              )
+            : false
+        });
         return action ? JSON.stringify(action) : "null";
       } catch (error) {
+        validationFailures.push(classifyPlannerDecisionError(error));
         correction = [
           `Your previous response was invalid: ${safePlannerError(error)}`,
           "Return a corrected canonical BrowserAction JSON object using only observed values, or null."
         ].join("\n");
       }
     }
+    this.diagnostics.push({
+      outcome: validationFailures.at(-1) ?? "invalid_action",
+      promptCharacterCount,
+      observationCharacterCount,
+      actionHistoryCount: actionHistory.length,
+      responseCharacterCount,
+      attempts: 2,
+      validationFailures: [...validationFailures],
+      action: null,
+      repeatedAction: false
+    });
     throw new Error(
       "Ollama did not return a valid observed BrowserAction after correction."
     );
@@ -571,6 +637,31 @@ function safePlannerError(error: unknown): string {
   return message.replace(/[\r\n]+/g, " ").slice(0, 300);
 }
 
+function classifyPlannerDecisionError(
+  error: unknown
+): "invalid_action" | "parser_failure" | "action_not_applicable" {
+  if (error instanceof SyntaxError) return "parser_failure";
+  const message = error instanceof Error ? error.message : String(error);
+  if (/selector .* observation|uniquely identify/i.test(message)) {
+    return "action_not_applicable";
+  }
+  return "invalid_action";
+}
+
+function summarizeAction(action: BrowserAction): {
+  type: BrowserAction["type"];
+  target: string | null;
+} {
+  if ("selector" in action) return { type: action.type, target: action.selector };
+  if ("url" in action) return { type: action.type, target: action.url };
+  return { type: action.type, target: null };
+}
+
+function actionIdentity(action: BrowserAction): string {
+  const summary = summarizeAction(action);
+  return `${summary.type}:${summary.target ?? ""}`;
+}
+
 function hasDuplicateVisibleSelector(
   observation: Observation,
   selector: string
@@ -691,7 +782,12 @@ export function evaluateAgentTrace(
   durationMs: number,
   plannerDurationMs: number | null = null,
   routing: PlannerRoutingMetadata | null = null,
-  adaptive: AdaptiveExecutionMetadata | null = null
+  adaptive: AdaptiveExecutionMetadata | null = null,
+  diagnosticContext: {
+    agentCompleted: boolean;
+    agentStepCount: number;
+    plannerDecisions: readonly PlannerDecisionDiagnostic[];
+  } | null = null
 ): GeneralizationExecution {
   const observationSteps = trace.steps.filter(
     (step): step is typeof step & { observation: Observation } =>
@@ -732,18 +828,35 @@ export function evaluateAgentTrace(
       error !== "Action denied by human approval."
   );
 
-  return evaluateTrajectory(scenario, {
+  const execution = evaluateTrajectory(scenario, {
     observations,
     actions,
     durationMs,
     plannerDurationMs,
     routing,
     adaptive,
+    plannerDecisions: diagnosticContext?.plannerDecisions ?? [],
+    agentCompleted: diagnosticContext?.agentCompleted ?? false,
+    agentStepCount: diagnosticContext?.agentStepCount ?? actions.length,
     safetyEvents,
     infrastructureError: infrastructureError ?? null,
     approvalRequired,
     safetyBlocked
   });
+  if (!adaptive || !diagnosticContext) return execution;
+  return {
+    ...execution,
+    adaptiveDiagnostics: analyzeAdaptiveRun({
+      scenario,
+      execution,
+      trace,
+      errors,
+      agentCompleted: diagnosticContext.agentCompleted,
+      agentStepCount: diagnosticContext.agentStepCount,
+      plannerDecisions: diagnosticContext.plannerDecisions,
+      adaptive
+    })
+  };
 }
 
 interface TrajectoryInput {
@@ -753,6 +866,9 @@ interface TrajectoryInput {
   plannerDurationMs?: number | null;
   routing?: PlannerRoutingMetadata | null;
   adaptive?: AdaptiveExecutionMetadata | null;
+  plannerDecisions?: readonly PlannerDecisionDiagnostic[];
+  agentCompleted?: boolean;
+  agentStepCount?: number;
   safetyEvents: SafetyEventCounts;
   infrastructureError: string | null;
   approvalRequired: boolean;
@@ -841,6 +957,12 @@ export function evaluateTrajectory(
     plannerDurationMs: input.plannerDurationMs ?? null,
     routing: input.routing ?? null,
     adaptive: input.adaptive ?? null,
+    plannerDecisions: input.plannerDecisions
+      ? input.plannerDecisions.map((item) => structuredClone(item))
+      : [],
+    agentCompleted: input.agentCompleted ?? false,
+    agentStepCount: input.agentStepCount ?? input.actions.length,
+    adaptiveDiagnostics: null,
     safetyEvents: input.safetyEvents,
     observations: input.observations,
     actions: input.actions,
@@ -866,6 +988,16 @@ function generalizationTaskMetadata(
     maxSteps: scenario.maxSteps,
     authenticationRequired: scenario.credentialsRequirement !== "none"
   };
+}
+
+function adaptiveMaxSteps(
+  productionMaxSteps: number,
+  debugReplay = false,
+  postEscalationStepBudget?: number
+): number {
+  return debugReplay && postEscalationStepBudget
+    ? productionMaxSteps + postEscalationStepBudget
+    : productionMaxSteps;
 }
 
 function failedGeneralizationExecution(

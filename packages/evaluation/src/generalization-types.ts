@@ -1,4 +1,9 @@
-import type { AdaptiveExecutionMetadata } from "@vibeqa/adaptive-execution";
+import type {
+  AdaptiveActionSummary,
+  AdaptiveExecutionMetadata,
+  AdaptiveHandoffSnapshot,
+  AdaptiveProgressEvent
+} from "@vibeqa/adaptive-execution";
 import type { BrowserAction, Observation } from "@vibeqa/schemas";
 
 import type {
@@ -113,6 +118,124 @@ export interface GeneralizationActionRecord {
   error: string | null;
 }
 
+export type PlannerDecisionOutcome =
+  | "valid_action"
+  | "null_action"
+  | "invalid_action"
+  | "parser_failure"
+  | "action_not_applicable";
+
+export interface PlannerDecisionDiagnostic {
+  outcome: PlannerDecisionOutcome;
+  promptCharacterCount: number;
+  observationCharacterCount: number;
+  actionHistoryCount: number;
+  responseCharacterCount: number;
+  attempts: number;
+  validationFailures: PlannerDecisionOutcome[];
+  action: AdaptiveActionSummary | null;
+  repeatedAction: boolean;
+}
+
+export type AdaptiveEscalationFailureReason =
+  | "HANDOFF_CONTEXT_INSUFFICIENT"
+  | "POST_ESCALATION_BUDGET_EXHAUSTED"
+  | "PRE_ESCALATION_STATE_DAMAGE"
+  | "GOAL_ALREADY_MISFRAMED"
+  | "REPEATED_STATE_FALSE_TRIGGER"
+  | "OLLAMA_INVALID_ACTION"
+  | "OLLAMA_NON_PROGRESS_ACTION"
+  | "EARLY_TERMINATION"
+  | "EVALUATOR_COMPLETION_MISMATCH"
+  | "SAFETY_BLOCK"
+  | "BROWSER_ACTION_FAILURE"
+  | "UNKNOWN_FAILURE";
+
+export type AdaptiveTerminationReason =
+  | "GOAL_COMPLETE"
+  | "MAX_STEPS"
+  | "PLANNER_NULL"
+  | "EVALUATOR_STOP"
+  | "ACTION_FAILURE"
+  | "NO_PROGRESS_STOP"
+  | "SAFETY_STOP"
+  | "ESCALATION_FAILURE"
+  | "OTHER";
+
+export type RepeatedStateTriggerQuality =
+  | "TRUE_STAGNATION"
+  | "BENIGN_REPEAT"
+  | "SEMANTIC_PROGRESS_SAME_FINGERPRINT"
+  | "UNKNOWN";
+
+export type OpportunityLossLevel = "none" | "low" | "medium" | "high";
+
+export interface RepeatedStateTriggerAudit {
+  currentFingerprint: string;
+  previousMatchingFingerprint: string | null;
+  actionsBetweenStates: AdaptiveActionSummary[];
+  urlChanged: boolean;
+  visibleTextChanged: boolean;
+  interactiveElementsChanged: boolean;
+  evaluatorReportedProgress: boolean | null;
+  classification: RepeatedStateTriggerQuality;
+}
+
+export interface AdaptiveObservationSummary {
+  fingerprint: string;
+  url: string;
+  title: string;
+  visibleTextSummary: string;
+  interactiveElementCount: number;
+  consoleErrorCount: number;
+}
+
+export interface AdaptivePhaseTrace {
+  phase: "deterministic" | "handoff" | "ollama";
+  observations: AdaptiveObservationSummary[];
+  actions: AdaptiveActionSummary[];
+  failures: string[];
+  pageFingerprints: string[];
+  progressDecisions: AdaptiveProgressEvent[];
+  evaluatorFeedback: string[];
+  durationMs: number | null;
+  remainingStepBudget: number | null;
+  goalRepresentation: string;
+  actionHistorySummary: AdaptiveActionSummary[];
+}
+
+export interface AdaptiveOpportunityLoss {
+  level: OpportunityLossLevel;
+  factors: string[];
+  initialInteractiveElementCount: number;
+  handoffInteractiveElementCount: number;
+  unexploredInteractiveElementCount: number;
+  startAndHandoffStateMatch: boolean;
+}
+
+export interface AdaptiveRunDiagnostics {
+  handoffSnapshot: AdaptiveHandoffSnapshot | null;
+  phases: AdaptivePhaseTrace[];
+  terminationReason: AdaptiveTerminationReason;
+  primaryFailureReason: AdaptiveEscalationFailureReason | null;
+  contributingFactors: AdaptiveEscalationFailureReason[];
+  repeatedStateAudits: RepeatedStateTriggerAudit[];
+  opportunityLoss: AdaptiveOpportunityLoss;
+  totalMaxSteps: number;
+  stepsConsumedBeforeEscalation: number;
+  remainingStepsAtHandoff: number;
+  actualPostEscalationSteps: number;
+  postEscalationEndReason: AdaptiveTerminationReason;
+  plannerDecisions: PlannerDecisionDiagnostic[];
+  promptContext: {
+    firstOllamaPromptCharacters: number | null;
+    firstOllamaObservationCharacters: number | null;
+    firstOllamaActionHistoryCount: number | null;
+    handoffPromptCharacters: number | null;
+    handoffActionHistoryCharacters: number | null;
+  };
+}
+
 export interface GeneralizationExecution {
   goalCompleted: boolean;
   detectedBugIds: string[];
@@ -130,6 +253,10 @@ export interface GeneralizationExecution {
   safetyBlocked: boolean;
   routing?: PlannerRoutingMetadata | null;
   adaptive?: AdaptiveExecutionMetadata | null;
+  plannerDecisions?: PlannerDecisionDiagnostic[];
+  agentCompleted?: boolean;
+  agentStepCount?: number;
+  adaptiveDiagnostics?: AdaptiveRunDiagnostics | null;
 }
 
 export interface GeneralizationRun extends GeneralizationExecution {
@@ -231,6 +358,66 @@ export interface GeneralizationMetrics extends GeneralizationPerformanceMetrics 
   hybridRouting: HybridRoutingMetrics | null;
   hybridDiagnostics: HybridRoutingDiagnostics | null;
   adaptiveExecution: AdaptiveExecutionMetrics | null;
+  adaptiveFailureAnalysis: AdaptiveFailureAnalysisMetrics | null;
+}
+
+export interface AdaptiveScenarioFailureMetrics {
+  scenarioId: string;
+  deterministicSuccessRate: number | null;
+  ollamaSuccessRate: number | null;
+  hybridSuccessRate: number | null;
+  adaptiveSuccessRate: number | null;
+  escalationRate: number;
+  successfulEscalationRate: number;
+  dominantFailureReason: AdaptiveEscalationFailureReason | null;
+  averagePreEscalationSteps: number;
+  averagePostEscalationSteps: number;
+  terminationReasonCounts: Record<AdaptiveTerminationReason, number>;
+  repeatedStateFalseTriggerRate: number;
+  opportunityLoss: OpportunityLossLevel;
+}
+
+export interface PureVsEscalatedComparison {
+  scenarioId: string;
+  pureOllamaRuns: number;
+  escalatedOllamaRuns: number;
+  sameStartingStateRate: number;
+  averagePureOllamaStepsAvailable: number;
+  averageEscalatedStepsAvailable: number;
+  averagePurePromptCharacters: number;
+  averageEscalatedPromptCharacters: number;
+  averagePriorActionsAtHandoff: number;
+  averageUnexploredElementsAtHandoff: number;
+  pureHiddenDiscoveryRate: number;
+  escalatedHiddenDiscoveryRate: number;
+  pureGoalCompletionRate: number;
+  escalatedGoalCompletionRate: number;
+  pureRecoveryRate: number;
+  escalatedRecoveryRate: number;
+  averagePureStatesBeforeDiscovery: number;
+  averagePureActionsBeforeDiscovery: number;
+  averagePureDiscoveryDurationMs: number;
+  averageAdaptiveStatesBeforeEscalation: number;
+  averageAdaptivePostEscalationActions: number;
+  pureDiscoveryPathShape: string;
+  adaptivePreEscalationPathShape: string;
+  dominantAdaptiveFailureReason: AdaptiveEscalationFailureReason | null;
+}
+
+export interface AdaptiveFailureAnalysisMetrics {
+  totalEscalatedRuns: number;
+  failedEscalatedRuns: number;
+  failureTaxonomyCounts: Record<AdaptiveEscalationFailureReason, number>;
+  contributingFactorCounts: Record<AdaptiveEscalationFailureReason, number>;
+  terminationReasonCounts: Record<AdaptiveTerminationReason, number>;
+  repeatedStateTriggerCounts: Record<RepeatedStateTriggerQuality, number>;
+  repeatedStateFalseTriggerRate: number;
+  meanRemainingBudgetAtEscalation: number;
+  meanActualPostEscalationSteps: number;
+  opportunityLossCounts: Record<OpportunityLossLevel, number>;
+  plannerDecisionCounts: Record<PlannerDecisionOutcome, number>;
+  scenarioFailures: AdaptiveScenarioFailureMetrics[];
+  pureVsEscalated: PureVsEscalatedComparison[];
 }
 
 export interface GeneralizationConfiguration {
@@ -248,6 +435,8 @@ export interface GeneralizationConfiguration {
   gitCommitSha: string | null;
   benchmarkApplication: BenchmarkApplicationConfiguration;
   randomSeed: null;
+  adaptiveDebugReplay: boolean;
+  adaptivePostEscalationStepBudget: number | null;
 }
 
 export interface GeneralizationSuiteResult {

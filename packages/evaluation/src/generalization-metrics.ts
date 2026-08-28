@@ -1,5 +1,6 @@
 import { describeDistribution } from "./metrics.js";
 import { aggregateAdaptiveExecutionMetrics } from "./adaptive-metrics.js";
+import { aggregateAdaptiveFailureAnalysis } from "./adaptive-failure-analysis.js";
 import { aggregateHybridRoutingDiagnostics } from "./hybrid-diagnostics.js";
 import { aggregateHybridRoutingMetrics } from "./hybrid-metrics.js";
 import type {
@@ -84,7 +85,8 @@ export function aggregateGeneralizationMetrics(
         successful: isSuccessfulRun(run),
         adaptive: run.adaptive
       }))
-    )
+    ),
+    adaptiveFailureAnalysis: aggregateAdaptiveFailureAnalysis(runs)
   };
 }
 

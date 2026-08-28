@@ -133,6 +133,7 @@ export class BenchmarkPlaywrightExecutor implements BenchmarkScenarioExecutor {
           verifyOllamaAvailability: async () => {
             await this.options.ollamaStrategy?.verifyAvailability();
           },
+          maxSteps: scenario.maxSteps,
           policyConfig: {
             maxDeterministicStepsBeforeEscalation: scenario.maxSteps
           },

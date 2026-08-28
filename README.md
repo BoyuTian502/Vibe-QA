@@ -396,6 +396,30 @@ judged from measured controlled and generalization comparisons; escalation can
 still be late, unnecessary, or unable to recover within the remaining step
 budget.
 
+### Adaptive Failure Diagnostics
+
+Generalization reports include an evaluator-only **Adaptive Escalation Failure
+Analysis**. Each Adaptive run is split into deterministic, handoff, and Ollama
+phases and records sanitized state summaries, remaining budget, planner output
+classification, termination reason, repeated-state trigger quality, and
+opportunity loss. The report also compares pure Ollama with escalated Ollama
+when both planners are included in the same benchmark session. Hidden bug IDs,
+hidden selectors, credentials, and raw prompts are never added to the handoff
+snapshot.
+
+Diagnostic replay can cap post-escalation actions without changing production
+Adaptive defaults:
+
+```bash
+npm run benchmark:qa -- --suite generalization --planner adaptive --runs 3 --adaptive-debug-replay --post-escalation-steps 1
+npm run benchmark:qa -- --suite generalization --planner adaptive --runs 3 --adaptive-debug-replay --post-escalation-steps 3
+npm run benchmark:qa -- --suite generalization --planner adaptive --runs 3 --adaptive-debug-replay --post-escalation-steps 6
+```
+
+Replay mode reruns the deterministic local benchmark to the same handoff state
+inside an isolated browser session and varies only the diagnostic
+post-escalation cap. It is a debugging aid, not a production policy change.
+
 Scenarios are labeled by meaningful execution demands:
 
 - `easy`: short direct workflows with obvious controls.
