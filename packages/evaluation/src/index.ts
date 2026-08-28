@@ -13,12 +13,18 @@ export {
 export type { BenchmarkReportPaths } from "./reporter.js";
 export { BenchmarkRunner, filterBenchmarkScenarios } from "./runner.js";
 export { aggregateHybridRoutingMetrics } from "./hybrid-metrics.js";
+export { aggregateAdaptiveExecutionMetrics } from "./adaptive-metrics.js";
+export type { AdaptiveMetricSource } from "./adaptive-metrics.js";
 export {
   aggregateHybridRoutingDiagnostics,
   DEFAULT_ROUTING_REGRET_THRESHOLD
 } from "./hybrid-diagnostics.js";
 export type { HybridDiagnosticSource } from "./hybrid-diagnostics.js";
 export { formatHybridDiagnosticsMarkdown } from "./hybrid-diagnostics-reporter.js";
+export {
+  formatAdaptiveExecutionMarkdown,
+  formatAdaptiveExecutionSummary
+} from "./adaptive-reporter.js";
 export type { BenchmarkRunnerOptions } from "./runner.js";
 export {
   aggregateGeneralizationMetrics,
@@ -73,6 +79,8 @@ export type {
 } from "./generalization-types.js";
 export type {
   BenchmarkClassification,
+  AdaptiveExecutionMetrics,
+  AdaptiveThresholdAnalysis,
   BenchmarkConfiguration,
   BenchmarkDifficulty,
   BenchmarkExecution,

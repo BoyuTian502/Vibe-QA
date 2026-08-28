@@ -357,6 +357,45 @@ versus 1.04 seconds. The result supports V2's quality improvement but not a
 generalization-latency or routing-regret improvement; local model variability
 and the current scenario mix remain important limitations.
 
+## Adaptive Execution
+
+Hybrid V2 makes one routing decision before execution. Its measured quality
+improved, but static routing sent every current generalization scenario to
+Ollama and therefore did not improve generalization latency. Adaptive Execution
+V1 instead starts every task with the deterministic strategy and monitors only
+runtime-observable evidence: repeated page states, no-progress windows, failed
+actions or evaluations, stalled recovery, exhausted safe candidates, and the
+deterministic step budget.
+
+The balanced product defaults allow at most one transition from deterministic
+to Ollama: four deterministic steps, two visits to an equivalent state, two
+failed actions, or three no-progress observations can trigger escalation. The
+same Agent and browser session continue after escalation, preserving the current
+page, authentication, action history, Memory, Trace, Safety Policy state, and
+step budget. Scenario IDs, benchmark labels, seeded bug IDs, hidden selectors,
+evaluator recommendations, credentials, and secrets never participate in the
+decision.
+
+```bash
+npm run benchmark:qa -- --planner adaptive --runs 3
+npm run benchmark:qa -- --suite generalization --planner adaptive --runs 3
+npm run benchmark:qa -- --suite generalization --compare deterministic,ollama,hybrid,adaptive --runs 3
+```
+
+Ollama availability is checked lazily only when escalation is required. If it
+is unavailable, the run remains labeled Adaptive, records degraded execution
+and the failed escalation, and is never counted as an Ollama execution. V5
+reports include escalation and avoided-LLM rates, successful escalation,
+pre/post escalation steps and time, invocation count, escalation utility, and
+conservative/balanced/aggressive threshold projections. Those projections are
+evaluator-side analysis only; they do not silently change product defaults.
+
+Adaptive V1 is deliberately conservative and one-way. It does not use an LLM
+router, restart the task, or cycle between planners. Its effectiveness must be
+judged from measured controlled and generalization comparisons; escalation can
+still be late, unnecessary, or unable to recover within the remaining step
+budget.
+
 Scenarios are labeled by meaningful execution demands:
 
 - `easy`: short direct workflows with obvious controls.
@@ -388,6 +427,7 @@ apps/
   dashboard/           Read-only report and evidence dashboard
   worker/              Worker application boundary
 packages/
+  adaptive-execution/ Runtime progress monitoring and one-way escalation
   agent-core/          Agent loop, memory, evaluator, trace, approvals
   browser-tools/       Browser session abstraction and observations
   browser-playwright/  Playwright BrowserController implementation

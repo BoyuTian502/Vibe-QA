@@ -223,6 +223,9 @@ function createRun(
       execution.routing,
       scenario.evaluatorOnly.recommendedPlannerCategory
     ),
+    adaptive: execution.adaptive
+      ? { ...structuredClone(execution.adaptive), finalOutcome: successful }
+      : null,
     id: `${planner}-${scenario.id}-${repetition}-${id}`,
     scenarioId: scenario.id,
     scenarioName: scenario.name,
@@ -312,7 +315,8 @@ function failedExecution(error: unknown): GeneralizationExecution {
     uniqueElementsBeforeDiscovery: 0,
     approvalRequired: false,
     safetyBlocked: false,
-    routing: null
+    routing: null,
+    adaptive: null
   };
 }
 

@@ -8,7 +8,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b packages/llm apps/benchmark-app packages/evaluation apps/benchmark-runner apps/cli apps/dashboard apps/worker packages/schemas packages/planner packages/browser-tools packages/safety-policy packages/agent-core packages/explorer packages/browser-playwright packages/prompts packages/test-fixtures packages/test-runner packages/test-engine",
+    "build": "tsc -b packages/llm packages/schemas packages/adaptive-execution apps/benchmark-app packages/evaluation apps/benchmark-runner apps/cli apps/dashboard apps/worker packages/planner packages/browser-tools packages/safety-policy packages/agent-core packages/explorer packages/browser-playwright packages/prompts packages/test-fixtures packages/test-runner packages/test-engine",
     "benchmark:qa": "npm run build && node apps/benchmark-runner/dist/index.js",
     "dashboard:qa": "npm run build && node apps/dashboard/dist/index.js",
     "demo:qa": "npm run build && node apps/cli/dist/demo.js",

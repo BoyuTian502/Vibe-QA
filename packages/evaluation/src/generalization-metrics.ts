@@ -1,4 +1,5 @@
 import { describeDistribution } from "./metrics.js";
+import { aggregateAdaptiveExecutionMetrics } from "./adaptive-metrics.js";
 import { aggregateHybridRoutingDiagnostics } from "./hybrid-diagnostics.js";
 import { aggregateHybridRoutingMetrics } from "./hybrid-metrics.js";
 import type {
@@ -74,6 +75,14 @@ export function aggregateGeneralizationMetrics(
         revisitRate: rate(run.revisitedStates, run.observations.length),
         detourRate: rate(run.detourActions, run.actions.length),
         routing: run.routing
+      }))
+    ),
+    adaptiveExecution: aggregateAdaptiveExecutionMetrics(
+      runs.map((run) => ({
+        planner: run.planner,
+        scenarioId: run.scenarioId,
+        successful: isSuccessfulRun(run),
+        adaptive: run.adaptive
       }))
     )
   };

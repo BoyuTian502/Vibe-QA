@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { parseBenchmarkCliOptions } from "../src/cli-options.js";
 import {
   DeterministicBenchmarkPlannerStrategy,
+  AdaptiveBenchmarkPlannerStrategy,
   HybridBenchmarkPlannerStrategy,
   OllamaBenchmarkPlannerStrategy
 } from "../src/planner-strategies.js";
@@ -56,6 +57,13 @@ describe("benchmark planner configuration", () => {
     expect(
       parseBenchmarkCliOptions(["--compare", "deterministic,ollama,hybrid"]).planners
     ).toEqual(["deterministic", "ollama", "hybrid"]);
+    expect(parseBenchmarkCliOptions(["--planner", "adaptive"]).planners).toEqual([
+      "adaptive"
+    ]);
+    expect(
+      parseBenchmarkCliOptions(["--compare", "deterministic,ollama,hybrid,adaptive"])
+        .planners
+    ).toEqual(["deterministic", "ollama", "hybrid", "adaptive"]);
   });
 
   it("preserves scenario difficulty metadata", () => {
@@ -73,6 +81,19 @@ describe("benchmark planner configuration", () => {
     );
 
     expect(prepared.testCase).toEqual(scenario.testCase);
+  });
+
+  it("starts Adaptive controlled workflows with the deterministic plan", async () => {
+    const deterministic = new DeterministicBenchmarkPlannerStrategy();
+    const strategy = new AdaptiveBenchmarkPlannerStrategy(deterministic);
+    const scenario = requiredScenario("login");
+
+    await expect(strategy.verifyAvailability()).resolves.toBeUndefined();
+    await expect(strategy.prepare(scenario)).resolves.toMatchObject({
+      testCase: scenario.testCase,
+      routing: null,
+      infrastructureError: null
+    });
   });
 
   it("uses LLMClient for Ollama planning without exposing typed credentials", async () => {

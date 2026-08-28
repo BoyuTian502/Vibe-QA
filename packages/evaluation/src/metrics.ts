@@ -13,6 +13,7 @@ import type {
   SafetyEventCounts,
   ScenarioBenchmarkMetrics
 } from "./types.js";
+import { aggregateAdaptiveExecutionMetrics } from "./adaptive-metrics.js";
 
 const CLASSIFICATIONS: readonly BenchmarkClassification[] = [
   "PASS",
@@ -68,6 +69,14 @@ export function aggregateBenchmarkMetrics(
         revisitRate: null,
         detourRate: null,
         routing: run.routing
+      }))
+    ),
+    adaptiveExecution: aggregateAdaptiveExecutionMetrics(
+      runs.map((run) => ({
+        planner: run.planner,
+        scenarioId: run.scenarioId,
+        successful: isSuccessfulClassification(run.classification),
+        adaptive: run.adaptive
       }))
     )
   };

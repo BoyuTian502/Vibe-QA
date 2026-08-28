@@ -2,6 +2,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { calculateLatencyRatio } from "./generalization-metrics.js";
+import {
+  formatAdaptiveExecutionMarkdown,
+  formatAdaptiveExecutionSummary
+} from "./adaptive-reporter.js";
 import { formatHybridDiagnosticsMarkdown } from "./hybrid-diagnostics-reporter.js";
 import type {
   GeneralizationPerformanceMetrics,
@@ -57,6 +61,7 @@ export async function writeGeneralizationReport(
         scenariosByPlanner: result.metrics.scenarioPlannerPerformance,
         hybridRouting: result.metrics.hybridRouting,
         hybridDiagnostics: result.metrics.hybridDiagnostics,
+        adaptiveExecution: result.metrics.adaptiveExecution,
         interpretation: generalizationInterpretation(result)
       })
     );
@@ -98,6 +103,9 @@ export function formatGeneralizationSummary(result: GeneralizationSuiteResult): 
           `Hybrid routing accuracy proxy: ${percentage(metrics.hybridRouting.routingAccuracyRate)} (${metrics.hybridRouting.routingAccuracyMatches}/${metrics.hybridRouting.routingAccuracyAttempts})`,
           `Hybrid fallbacks / unavailable: ${metrics.hybridRouting.fallbackCount} / ${metrics.hybridRouting.unavailableExecutionCount}`
         ]
+      : []),
+    ...(metrics.adaptiveExecution
+      ? ["", formatAdaptiveExecutionSummary(metrics.adaptiveExecution)]
       : []),
     ""
   ].join("\n");
@@ -165,6 +173,17 @@ export function formatGeneralizationMarkdownReport(
           "### Hybrid V1 vs Hybrid V2",
           "",
           "The persisted Hybrid V1 generalization baseline was 15.0% hidden discovery, 37.5% ambiguous-goal completion, 38.3% recovery, 0.454 exploration efficiency, 44.7% state revisits, 3.95s average duration, and 30.0% expected-outcome stability. These values are historical and were not rerun as V1 in this experiment."
+        ]
+      : []),
+    ...(result.metrics.adaptiveExecution
+      ? [
+          "",
+          formatAdaptiveExecutionMarkdown(
+            result.metrics.adaptiveExecution,
+            generalizationAdaptiveInterpretation(result)
+          ),
+          "",
+          adaptivePerformanceMarkdown(result)
         ]
       : []),
     "",
@@ -283,6 +302,48 @@ function generalizationHybridRoutingMarkdown(
         ].join("\n")
       : "- No Hybrid performance sample is available."
   ].join("\n");
+}
+
+function adaptivePerformanceMarkdown(result: GeneralizationSuiteResult): string {
+  const adaptive = result.metrics.plannerPerformance.find(
+    (planner) => planner.planner === "adaptive"
+  );
+  if (!adaptive) return "No Adaptive generalization sample is available.";
+  return [
+    "### Adaptive Generalization Performance",
+    "",
+    `- Hidden discovery: ${percentage(adaptive.autonomousDiscoveryRate)}`,
+    `- Ambiguous goal completion: ${percentage(adaptive.goalCompletionRate)}`,
+    `- Recovery success: ${percentage(adaptive.recoverySuccessRate)}`,
+    `- Exploration efficiency: ${decimal(adaptive.explorationEfficiency)}`,
+    `- State revisit rate: ${percentage(adaptive.stateRevisitRate)}`,
+    `- Average duration: ${seconds(adaptive.averageDurationMs)}`,
+    `- Stability: ${percentage(adaptive.repeatedRunStability)}`
+  ].join("\n");
+}
+
+function generalizationAdaptiveInterpretation(
+  result: GeneralizationSuiteResult
+): string[] {
+  const adaptive = result.metrics.plannerPerformance.find(
+    (planner) => planner.planner === "adaptive"
+  );
+  const deterministic = result.metrics.plannerPerformance.find(
+    (planner) => planner.planner === "deterministic"
+  );
+  const ollama = result.metrics.plannerPerformance.find(
+    (planner) => planner.planner === "ollama"
+  );
+  const metrics = result.metrics.adaptiveExecution;
+  if (!adaptive || !metrics) return ["No Adaptive generalization sample is available."];
+  return [
+    `Adaptive hidden discovery measured ${percentage(adaptive.autonomousDiscoveryRate)}${deterministic ? ` versus ${percentage(deterministic.autonomousDiscoveryRate)} for deterministic` : ""}.`,
+    `Adaptive recovery measured ${percentage(adaptive.recoverySuccessRate)}${deterministic ? ` versus ${percentage(deterministic.recoverySuccessRate)} for deterministic` : ""}.`,
+    `Adaptive average duration measured ${seconds(adaptive.averageDurationMs)}${ollama ? ` versus ${seconds(ollama.averageDurationMs)} for pure Ollama` : ""}.`,
+    `Adaptive avoided Ollama in ${percentage(metrics.avoidedLlmRate)} of measured runs and escalated in ${percentage(metrics.escalationRate)}.`,
+    `Useful escalations (${metrics.utilityCounts.USEFUL_ESCALATION}) are compared with unnecessary escalations (${metrics.utilityCounts.UNNECESSARY_ESCALATION}) using only post-run measured deterministic outcomes.`,
+    "The intended latency/generalization tradeoff is not declared successful unless these measured values satisfy both efficiency and quality criteria."
+  ];
 }
 
 function generalizationHybridInterpretation(

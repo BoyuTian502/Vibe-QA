@@ -15,6 +15,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@vibeqa/adaptive-execution": "0.0.0",
     "@vibeqa/agent-core": "0.0.0",
     "@vibeqa/benchmark-app": "0.0.0",
     "@vibeqa/browser-playwright": "0.0.0",

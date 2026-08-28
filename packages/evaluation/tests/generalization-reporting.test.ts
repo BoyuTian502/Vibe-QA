@@ -157,6 +157,61 @@ describe("generalization robustness reporting", () => {
     expect(report).toContain("Routing Confusion Matrix");
     expect(report).toContain("Why Hybrid V1 Failed");
   });
+
+  it("adds measured Adaptive execution diagnostics to the V5 report", async () => {
+    const result = await new GeneralizationRunner({
+      execute: async () =>
+        execution({
+          goalCompleted: true,
+          adaptive: {
+            requestedStrategy: "adaptive",
+            startingPlanner: "deterministic",
+            escalationRequired: true,
+            escalationOccurred: true,
+            escalationSucceeded: true,
+            ollamaAvailable: true,
+            degradedExecution: false,
+            escalationStep: 2,
+            escalationSignals: ["repeated-state"],
+            escalationReason: "Runtime progress monitoring detected: repeated-state.",
+            plannerBefore: "deterministic",
+            plannerAfter: "ollama",
+            deterministicSteps: 2,
+            ollamaSteps: 1,
+            totalSteps: 3,
+            timeBeforeEscalationMs: 100,
+            timeAfterEscalationMs: 200,
+            ollamaInvocationCount: 2,
+            finalOutcome: null,
+            progressEvents: [
+              {
+                step: 2,
+                progressed: false,
+                reasons: ["repeated-state", "no-progress"],
+                repeatedStateCount: 2,
+                noProgressCount: 1,
+                failedActionCount: 0,
+                evaluationFailureCount: 0,
+                signals: ["repeated-state"]
+              }
+            ],
+            escalationFailure: null
+          }
+        })
+    }).run([scenario("adaptive")], {
+      runsPerScenario: 1,
+      planners: ["adaptive"]
+    });
+    const report = formatGeneralizationMarkdownReport(result);
+
+    expect(report).toContain("Benchmark V5 - Adaptive Progressive Escalation");
+    expect(report).toContain("Escalation rate: 100.0% (1)");
+    expect(report).toContain("Avoided LLM rate: 0.0% (0)");
+    expect(report).toContain("Successful escalation rate: 100.0% (1/1)");
+    expect(report).toContain("USEFUL_ESCALATION: 1");
+    expect(report).toContain("conservative");
+    expect(report).toContain("Adaptive Generalization Performance");
+  });
 });
 
 function runner(

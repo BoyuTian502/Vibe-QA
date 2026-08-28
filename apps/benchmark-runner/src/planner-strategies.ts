@@ -47,6 +47,23 @@ export class DeterministicBenchmarkPlannerStrategy implements BenchmarkPlannerSt
   }
 }
 
+export class AdaptiveBenchmarkPlannerStrategy implements BenchmarkPlannerStrategy {
+  readonly name = "adaptive" as const;
+  readonly modelName = "deterministic-first+qwen2.5-coder:7b";
+
+  constructor(private readonly deterministic: DeterministicBenchmarkPlannerStrategy) {}
+
+  async verifyAvailability(): Promise<void> {
+    // Ollama is checked lazily only if runtime evidence requires escalation.
+  }
+
+  async prepare(
+    scenario: ExecutableBenchmarkScenario
+  ): Promise<PreparedBenchmarkScenario> {
+    return await this.deterministic.prepare(scenario);
+  }
+}
+
 export class OllamaBenchmarkPlannerStrategy implements BenchmarkPlannerStrategy {
   readonly name = "ollama" as const;
   private readonly endpoint: string;

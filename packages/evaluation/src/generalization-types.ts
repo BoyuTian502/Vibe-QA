@@ -1,6 +1,8 @@
+import type { AdaptiveExecutionMetadata } from "@vibeqa/adaptive-execution";
 import type { BrowserAction, Observation } from "@vibeqa/schemas";
 
 import type {
+  AdaptiveExecutionMetrics,
   BenchmarkApplicationConfiguration,
   BenchmarkDifficulty,
   BenchmarkPlanner,
@@ -127,6 +129,7 @@ export interface GeneralizationExecution {
   approvalRequired: boolean;
   safetyBlocked: boolean;
   routing?: PlannerRoutingMetadata | null;
+  adaptive?: AdaptiveExecutionMetadata | null;
 }
 
 export interface GeneralizationRun extends GeneralizationExecution {
@@ -227,6 +230,7 @@ export interface GeneralizationMetrics extends GeneralizationPerformanceMetrics 
   >;
   hybridRouting: HybridRoutingMetrics | null;
   hybridDiagnostics: HybridRoutingDiagnostics | null;
+  adaptiveExecution: AdaptiveExecutionMetrics | null;
 }
 
 export interface GeneralizationConfiguration {

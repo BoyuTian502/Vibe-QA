@@ -1,10 +1,16 @@
+import type {
+  AdaptiveExecutionMetadata,
+  EscalationUtility,
+  ThresholdAnalysisProfile
+} from "@vibeqa/adaptive-execution";
+
 export type BenchmarkMode = "functional" | "exploratory" | "regression";
 
 export type BenchmarkDifficulty = "easy" | "medium" | "hard";
 
 export type ExecutionPlanner = "deterministic" | "ollama";
 
-export type BenchmarkPlanner = ExecutionPlanner | "hybrid";
+export type BenchmarkPlanner = ExecutionPlanner | "hybrid" | "adaptive";
 
 export type RoutingConfidence = "high" | "medium" | "low";
 
@@ -154,6 +160,31 @@ export interface HybridRoutingDiagnostics {
   scenarioMisroutes: HybridRoutingExecutionDiagnostic[];
 }
 
+export interface AdaptiveThresholdAnalysis {
+  profile: ThresholdAnalysisProfile["name"];
+  projectedEscalations: number;
+  projectedEscalationRate: number;
+}
+
+export interface AdaptiveExecutionMetrics {
+  totalAdaptiveRuns: number;
+  escalationCount: number;
+  escalationRate: number;
+  successfulEscalationCount: number;
+  successfulEscalationRate: number;
+  avoidedLlmCount: number;
+  avoidedLlmRate: number;
+  ollamaInvocationCount: number;
+  preEscalationSteps: DistributionStatistics;
+  postEscalationSteps: DistributionStatistics;
+  timeBeforeEscalationMs: DistributionStatistics;
+  timeAfterEscalationMs: DistributionStatistics;
+  taskSuccessRate: number;
+  utilityCounts: Record<EscalationUtility, number>;
+  unclassifiedRuns: number;
+  thresholdAnalysis: AdaptiveThresholdAnalysis[];
+}
+
 export type BenchmarkClassification =
   | "PASS"
   | "EXPECTED_BUG_FOUND"
@@ -211,6 +242,7 @@ export interface BenchmarkExecution {
   safetyEvents: SafetyEventCounts;
   exploration: ExplorationBenchmarkDetails | null;
   routing?: PlannerRoutingMetadata | null;
+  adaptive?: AdaptiveExecutionMetadata | null;
 }
 
 export interface BenchmarkRun {
@@ -234,6 +266,7 @@ export interface BenchmarkRun {
   safetyEvents: SafetyEventCounts;
   exploration: ExplorationBenchmarkDetails | null;
   routing?: PlannerRoutingMetadata | null;
+  adaptive?: AdaptiveExecutionMetadata | null;
 }
 
 export interface DistributionStatistics {
@@ -298,6 +331,7 @@ export interface BenchmarkMetrics extends BenchmarkPerformanceMetrics {
   plannerPerformance: PlannerBenchmarkMetrics[];
   hybridRouting: HybridRoutingMetrics | null;
   hybridDiagnostics: HybridRoutingDiagnostics | null;
+  adaptiveExecution: AdaptiveExecutionMetrics | null;
 }
 
 export interface BenchmarkApplicationConfiguration {

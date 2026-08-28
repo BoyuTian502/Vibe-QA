@@ -19,6 +19,7 @@ import { GeneralizationPlaywrightExecutor } from "./generalization-executor.js";
 import { createGeneralizationScenarios } from "./generalization-scenarios.js";
 import {
   DeterministicBenchmarkPlannerStrategy,
+  AdaptiveBenchmarkPlannerStrategy,
   HybridBenchmarkPlannerStrategy,
   OllamaBenchmarkPlannerStrategy,
   type BenchmarkPlannerStrategy
@@ -34,7 +35,9 @@ async function main(): Promise<void> {
   try {
     const options = parseBenchmarkCliOptions();
     const ollamaClient =
-      options.planners.includes("ollama") || options.planners.includes("hybrid")
+      options.planners.includes("ollama") ||
+      options.planners.includes("hybrid") ||
+      options.planners.includes("adaptive")
         ? new OllamaClient(OLLAMA_MODEL)
         : null;
     const strategies = createPlannerStrategies(options.planners, ollamaClient);
@@ -77,6 +80,8 @@ async function main(): Promise<void> {
     const executor = new BenchmarkPlaywrightExecutor({
       benchmark,
       plannerStrategies: strategies,
+      ollamaClient: ollamaClient ?? undefined,
+      ollamaStrategy: strategies.ollama as OllamaBenchmarkPlannerStrategy | undefined,
       onRunStart: (scenario, repetition, planner) => {
         completedRuns += 1;
         console.log(
@@ -122,10 +127,18 @@ function createPlannerStrategies(
 ): Partial<Record<BenchmarkPlanner, BenchmarkPlannerStrategy>> {
   const strategies: Partial<Record<BenchmarkPlanner, BenchmarkPlannerStrategy>> = {};
   const deterministic = new DeterministicBenchmarkPlannerStrategy();
-  if (planners.includes("deterministic") || planners.includes("hybrid")) {
+  if (
+    planners.includes("deterministic") ||
+    planners.includes("hybrid") ||
+    planners.includes("adaptive")
+  ) {
     strategies.deterministic = deterministic;
   }
-  if (planners.includes("ollama") || planners.includes("hybrid")) {
+  if (
+    planners.includes("ollama") ||
+    planners.includes("hybrid") ||
+    planners.includes("adaptive")
+  ) {
     if (!ollamaClient) {
       throw new Error("The Ollama planner client is not configured.");
     }
@@ -135,6 +148,9 @@ function createPlannerStrategies(
       strategies.hybrid = new HybridBenchmarkPlannerStrategy(deterministic, ollama, {
         allowDeterministicFallback: false
       });
+    }
+    if (planners.includes("adaptive")) {
+      strategies.adaptive = new AdaptiveBenchmarkPlannerStrategy(deterministic);
     }
   }
   return strategies;
@@ -170,6 +186,8 @@ async function runGeneralizationBenchmark(input: {
     ollamaClient: input.ollamaClient ?? undefined,
     hybridStrategy: input.strategies.hybrid as
       HybridBenchmarkPlannerStrategy | undefined,
+    ollamaStrategy: input.strategies.ollama as
+      OllamaBenchmarkPlannerStrategy | undefined,
     onRunStart: (scenario, repetition, planner) => {
       completedRuns += 1;
       console.log(
@@ -205,7 +223,10 @@ function plannerModels(
 ): Partial<Record<BenchmarkPlanner, string>> {
   return {
     ...(planners.includes("ollama") ? { ollama: OLLAMA_MODEL } : {}),
-    ...(planners.includes("hybrid") ? { hybrid: "rule-based-v2" } : {})
+    ...(planners.includes("hybrid") ? { hybrid: "rule-based-v2" } : {}),
+    ...(planners.includes("adaptive")
+      ? { adaptive: `deterministic-first+${OLLAMA_MODEL}` }
+      : {})
   };
 }
 

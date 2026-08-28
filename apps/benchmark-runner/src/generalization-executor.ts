@@ -1,4 +1,8 @@
 import { Agent, type AgentTrace, type BrowserController } from "@vibeqa/agent-core";
+import {
+  AdaptiveExecutionController,
+  type AdaptiveExecutionMetadata
+} from "@vibeqa/adaptive-execution";
 import type { BenchmarkServer } from "@vibeqa/benchmark-app";
 import { PlaywrightBrowserController } from "@vibeqa/browser-playwright";
 import {
@@ -16,9 +20,13 @@ import {
 import {
   createElementKey,
   createPageStateFingerprint,
+  createExplorationState,
   ExplorationSession,
   generateActionCandidates,
   normalizeUrl,
+  actionKey,
+  type ActionCandidate,
+  type ExplorationState,
   type ExplorationResult
 } from "@vibeqa/explorer";
 import type { LLMClient } from "@vibeqa/llm";
@@ -34,7 +42,10 @@ import {
 } from "@vibeqa/schemas";
 
 import { benchmarkCredentials } from "./scenarios.js";
-import type { HybridBenchmarkPlannerStrategy } from "./planner-strategies.js";
+import type {
+  HybridBenchmarkPlannerStrategy,
+  OllamaBenchmarkPlannerStrategy
+} from "./planner-strategies.js";
 
 interface ClosableBrowserController extends BrowserController {
   close(): Promise<void>;
@@ -45,6 +56,7 @@ interface ClosableBrowserController extends BrowserController {
 export interface GeneralizationPlaywrightExecutorOptions {
   benchmark: BenchmarkServer;
   ollamaClient?: LLMClient;
+  ollamaStrategy?: OllamaBenchmarkPlannerStrategy;
   hybridStrategy?: HybridBenchmarkPlannerStrategy;
   launchBrowser?: () => Promise<ClosableBrowserController>;
   safetyPolicy?: ActionSafetyPolicy;
@@ -81,7 +93,7 @@ export class GeneralizationPlaywrightExecutor implements GeneralizationScenarioE
     let routing: PlannerRoutingMetadata | null = null;
 
     try {
-      let executedPlanner: ExecutionPlanner;
+      let executedPlanner: ExecutionPlanner | "adaptive";
       if (planner === "hybrid") {
         if (!this.options.hybridStrategy) {
           throw new Error("The Hybrid generalization strategy is not configured.");
@@ -113,6 +125,49 @@ export class GeneralizationPlaywrightExecutor implements GeneralizationScenarioE
       ]);
 
       const plannerInput = toGeneralizationPlannerInput(scenario);
+      if (executedPlanner === "adaptive") {
+        if (!this.options.ollamaClient) {
+          throw new Error("The adaptive strategy requires an Ollama client.");
+        }
+        const ollamaClient = new GeneralizationAgentClient(
+          this.options.ollamaClient,
+          this.now
+        );
+        const controller = new AdaptiveExecutionController({
+          deterministicClient: new DeterministicGeneralizationClient(
+            plannerInput.startUrl,
+            plannerInput.goal,
+            this.safetyPolicy
+          ),
+          ollamaClient,
+          verifyOllamaAvailability: async () => {
+            if (!this.options.ollamaStrategy) {
+              throw new Error("The Ollama availability check is not configured.");
+            }
+            await this.options.ollamaStrategy.verifyAvailability();
+          },
+          now: this.now
+        });
+        await plannerBrowser.navigate(plannerInput.startUrl);
+        const agent = new Agent({
+          browser: plannerBrowser,
+          llmClient: controller,
+          safetyPolicy: this.safetyPolicy,
+          maxSteps: plannerInput.maxSteps
+        });
+        await agent.run(plannerInput.goal);
+        return evaluateAgentTrace(
+          scenario,
+          agent.getTrace(),
+          agent.state.errors,
+          agent.getPendingApproval() !== null,
+          Math.max(0, this.now() - startedAt),
+          ollamaClient.totalGenerationDurationMs,
+          routing,
+          controller.getMetadata(agent.state.stepCount)
+        );
+      }
+
       if (executedPlanner === "deterministic") {
         const baselinePolicy = new DefaultActionSafetyPolicy();
         const result = await new ExplorationSession({
@@ -185,7 +240,101 @@ export class GeneralizationPlaywrightExecutor implements GeneralizationScenarioE
   }
 }
 
-class GeneralizationAgentClient implements LLMClient {
+class DeterministicGeneralizationClient implements LLMClient {
+  private readonly state: ExplorationState;
+  private pending: { candidate: ActionCandidate; fromFingerprint: string } | null =
+    null;
+
+  constructor(
+    startUrl: string,
+    private readonly goal: string,
+    private readonly safetyPolicy: ActionSafetyPolicy
+  ) {
+    this.state = createExplorationState(startUrl, goal);
+  }
+
+  async generate(prompt: string): Promise<string> {
+    const observation = extractPromptObservation(prompt);
+    const history = extractPromptActions(prompt);
+    const fingerprint = this.recordObservation(observation);
+    if (this.pending) {
+      this.state.executedActions.push({
+        candidateId: this.pending.candidate.id,
+        elementKey: this.pending.candidate.elementKey,
+        fromStateFingerprint: this.pending.fromFingerprint,
+        toStateFingerprint: fingerprint,
+        action: this.pending.candidate.action,
+        actionKey: actionKey(this.pending.candidate.action),
+        success: true
+      });
+      this.state.stepCount += 1;
+      this.pending = null;
+    }
+
+    const candidates = generateActionCandidates(observation, fingerprint, this.state);
+    for (const candidate of candidates) {
+      if (
+        candidate.action.type === "click" &&
+        (isBareElementSelector(candidate.action.selector) ||
+          hasDuplicateVisibleSelector(observation, candidate.action.selector))
+      ) {
+        continue;
+      }
+      const decision = await this.safetyPolicy.evaluate(candidate.action, {
+        goal: this.goal,
+        observation,
+        actionHistory: history
+      });
+      if (decision.decision !== "allow") continue;
+      this.pending = { candidate, fromFingerprint: fingerprint };
+      return JSON.stringify(candidate.action);
+    }
+    return "null";
+  }
+
+  private recordObservation(observation: Observation): string {
+    const fingerprint = createPageStateFingerprint(observation);
+    const normalizedUrl = normalizeUrl(observation.url);
+    if (!this.state.visitedUrls.includes(normalizedUrl)) {
+      this.state.visitedUrls.push(normalizedUrl);
+    }
+    const existing = this.state.observedPageStates.find(
+      (node) => node.fingerprint === fingerprint
+    );
+    if (existing) {
+      existing.visitCount += 1;
+    } else {
+      this.state.observedPageStates.push({
+        fingerprint,
+        normalizedUrl,
+        observation,
+        firstSeenStep: this.state.stepCount,
+        visitCount: 1
+      });
+    }
+    for (const element of observation.elements.filter((item) => item.visible)) {
+      const elementKey = createElementKey(element);
+      if (
+        !this.state.discoveredInteractiveElements.some(
+          (item) =>
+            item.stateFingerprint === fingerprint && item.elementKey === elementKey
+        )
+      ) {
+        this.state.discoveredInteractiveElements.push({
+          stateFingerprint: fingerprint,
+          elementKey,
+          element,
+          firstSeenStep: this.state.stepCount
+        });
+      }
+    }
+    this.state.currentUrl = normalizedUrl;
+    this.state.uniquePageStateCount = this.state.observedPageStates.length;
+    return fingerprint;
+  }
+}
+
+export class GeneralizationAgentClient implements LLMClient {
   private generationDurationMs = 0;
 
   constructor(
@@ -393,6 +542,11 @@ function extractPromptObservation(agentPrompt: string): Observation {
   return JSON.parse(match[1]) as Observation;
 }
 
+function extractPromptActions(agentPrompt: string): BrowserAction[] {
+  const match = /Previous actions: (\[.*\])\nDiscovered bugs:/s.exec(agentPrompt);
+  return match?.[1] ? (JSON.parse(match[1]) as BrowserAction[]) : [];
+}
+
 function extractJsonValue(value: string): string {
   const fenced = /```(?:json)?\s*([\s\S]*?)\s*```/i.exec(value);
   if (fenced?.[1]) {
@@ -536,7 +690,8 @@ export function evaluateAgentTrace(
   approvalRequired: boolean,
   durationMs: number,
   plannerDurationMs: number | null = null,
-  routing: PlannerRoutingMetadata | null = null
+  routing: PlannerRoutingMetadata | null = null,
+  adaptive: AdaptiveExecutionMetadata | null = null
 ): GeneralizationExecution {
   const observationSteps = trace.steps.filter(
     (step): step is typeof step & { observation: Observation } =>
@@ -583,6 +738,7 @@ export function evaluateAgentTrace(
     durationMs,
     plannerDurationMs,
     routing,
+    adaptive,
     safetyEvents,
     infrastructureError: infrastructureError ?? null,
     approvalRequired,
@@ -596,6 +752,7 @@ interface TrajectoryInput {
   durationMs: number;
   plannerDurationMs?: number | null;
   routing?: PlannerRoutingMetadata | null;
+  adaptive?: AdaptiveExecutionMetadata | null;
   safetyEvents: SafetyEventCounts;
   infrastructureError: string | null;
   approvalRequired: boolean;
@@ -683,6 +840,7 @@ export function evaluateTrajectory(
     durationMs: input.durationMs,
     plannerDurationMs: input.plannerDurationMs ?? null,
     routing: input.routing ?? null,
+    adaptive: input.adaptive ?? null,
     safetyEvents: input.safetyEvents,
     observations: input.observations,
     actions: input.actions,

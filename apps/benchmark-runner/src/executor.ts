@@ -1,4 +1,9 @@
 import type { BenchmarkServer } from "@vibeqa/benchmark-app";
+import {
+  AdaptiveExecutionController,
+  createCompletedDeterministicMetadata,
+  type AdaptiveExecutionMetadata
+} from "@vibeqa/adaptive-execution";
 import type { BrowserController } from "@vibeqa/agent-core";
 import { PlaywrightBrowserController } from "@vibeqa/browser-playwright";
 import type {
@@ -10,12 +15,16 @@ import type {
   SafetyEventCounts
 } from "@vibeqa/evaluation";
 import { ExplorationSession, type ExplorationResult } from "@vibeqa/explorer";
+import type { LLMClient } from "@vibeqa/llm";
+import type { BrowserAction } from "@vibeqa/schemas";
 import { TestTask, type TestResult } from "@vibeqa/test-engine";
 
 import {
   DeterministicBenchmarkPlannerStrategy,
+  type OllamaBenchmarkPlannerStrategy,
   type BenchmarkPlannerStrategy
 } from "./planner-strategies.js";
+import { GeneralizationAgentClient } from "./generalization-executor.js";
 import { benchmarkCredentials, type ExecutableBenchmarkScenario } from "./scenarios.js";
 
 interface ClosableBrowserController extends BrowserController {
@@ -26,6 +35,8 @@ export interface BenchmarkPlaywrightExecutorOptions {
   benchmark: BenchmarkServer;
   launchBrowser?: () => Promise<ClosableBrowserController>;
   plannerStrategies?: Partial<Record<BenchmarkPlanner, BenchmarkPlannerStrategy>>;
+  ollamaClient?: LLMClient;
+  ollamaStrategy?: OllamaBenchmarkPlannerStrategy;
   now?: () => number;
   onRunStart?: (
     scenario: BenchmarkScenario,
@@ -93,23 +104,62 @@ export class BenchmarkPlaywrightExecutor implements BenchmarkScenarioExecutor {
           scenario,
           result,
           Math.max(0, this.now() - startedAt),
-          routing
+          routing,
+          planner === "adaptive"
+            ? createCompletedDeterministicMetadata(
+                result.state.stepCount,
+                Math.max(0, this.now() - startedAt)
+              )
+            : null
         );
       }
 
       if (!prepared.testCase) {
         throw new Error(`Scenario ${scenario.id} does not define a TestCase.`);
       }
+      let adaptiveController: AdaptiveExecutionController | null = null;
+      if (planner === "adaptive") {
+        if (!this.options.ollamaClient || !this.options.ollamaStrategy) {
+          throw new Error("The adaptive benchmark strategy is not fully configured.");
+        }
+        adaptiveController = new AdaptiveExecutionController({
+          deterministicClient: new ScriptedActionClient(
+            prepared.testCase.steps.map((step) => step.action)
+          ),
+          ollamaClient: new GeneralizationAgentClient(
+            this.options.ollamaClient,
+            this.now
+          ),
+          verifyOllamaAvailability: async () => {
+            await this.options.ollamaStrategy?.verifyAvailability();
+          },
+          policyConfig: {
+            maxDeterministicStepsBeforeEscalation: scenario.maxSteps
+          },
+          escalateWhenDeterministicExhausted: false,
+          now: this.now
+        });
+      }
       const result = await new TestTask({
         browser: benchmarkBrowser,
         testCase: prepared.testCase,
-        screenshotDirectory: "run-output/benchmark-discarded-evidence"
+        screenshotDirectory: "run-output/benchmark-discarded-evidence",
+        llmClient: adaptiveController ?? undefined,
+        maxSteps: scenario.maxSteps
       }).run();
       return testExecution(
         executable,
         result,
         Math.max(0, this.now() - startedAt),
-        routing
+        routing,
+        adaptiveController
+          ? adaptiveController.getMetadata(result.executedSteps.length)
+          : planner === "adaptive"
+            ? createCompletedDeterministicMetadata(
+                result.executedSteps.length,
+                Math.max(0, this.now() - startedAt)
+              )
+            : null
       );
     } catch (error) {
       if (routing) {
@@ -123,6 +173,18 @@ export class BenchmarkPlaywrightExecutor implements BenchmarkScenarioExecutor {
     } finally {
       await browser?.close();
     }
+  }
+}
+
+class ScriptedActionClient implements LLMClient {
+  private index = 0;
+
+  constructor(private readonly actions: readonly BrowserAction[]) {}
+
+  async generate(): Promise<string> {
+    const action = this.actions[this.index];
+    this.index += 1;
+    return action ? JSON.stringify(action) : "null";
   }
 }
 
@@ -174,7 +236,8 @@ function testExecution(
   scenario: ExecutableBenchmarkScenario,
   result: TestResult,
   durationMs: number,
-  routing: PlannerRoutingMetadata | null
+  routing: PlannerRoutingMetadata | null,
+  adaptive: AdaptiveExecutionMetadata | null = null
 ): BenchmarkExecution {
   const detectedBugIds = extractBugIds(result);
   if (
@@ -201,7 +264,8 @@ function testExecution(
     durationMs,
     safetyEvents: countSafetyEvents([result.trace]),
     exploration: null,
-    routing
+    routing,
+    adaptive
   };
 }
 
@@ -209,7 +273,8 @@ function explorationExecution(
   scenario: BenchmarkScenario,
   result: ExplorationResult,
   durationMs: number,
-  routing: PlannerRoutingMetadata | null
+  routing: PlannerRoutingMetadata | null,
+  adaptive: AdaptiveExecutionMetadata | null = null
 ): BenchmarkExecution {
   const detectedBugIds = extractBugIds(result);
   const criteria = scenario.successCriteria;
@@ -254,14 +319,16 @@ function explorationExecution(
       coverageScore,
       terminationReason: result.stopReason
     },
-    routing
+    routing,
+    adaptive
   };
 }
 
 function failedBenchmarkExecution(
   error: string,
   durationMs: number,
-  routing: PlannerRoutingMetadata | null
+  routing: PlannerRoutingMetadata | null,
+  adaptive: AdaptiveExecutionMetadata | null = null
 ): BenchmarkExecution {
   return {
     expectedOutcomeMet: false,
@@ -272,7 +339,8 @@ function failedBenchmarkExecution(
     durationMs,
     safetyEvents: { allowed: 0, blocked: 0, approvalRequired: 0 },
     exploration: null,
-    routing
+    routing,
+    adaptive
   };
 }
 

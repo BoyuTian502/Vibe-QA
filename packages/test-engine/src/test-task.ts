@@ -18,6 +18,8 @@ export interface TestTaskOptions {
   testCase: TestCase;
   screenshotDirectory?: string;
   evaluator?: TestEvaluator;
+  llmClient?: LLMClient;
+  maxSteps?: number;
 }
 
 export class TestTask {
@@ -25,6 +27,8 @@ export class TestTask {
   private readonly testCase: TestCase;
   private readonly evaluator: TestEvaluator;
   private readonly screenshotDirectory: string;
+  private readonly llmClient: LLMClient;
+  private readonly maxSteps: number;
 
   constructor(options: TestTaskOptions) {
     this.browser = options.browser;
@@ -32,6 +36,10 @@ export class TestTask {
     this.evaluator = options.evaluator ?? new TestEvaluator();
     this.screenshotDirectory =
       options.screenshotDirectory ?? join(process.cwd(), "run-output", "test-engine");
+    this.llmClient =
+      options.llmClient ??
+      new TestStepClient(this.testCase.steps.map((step) => step.action));
+    this.maxSteps = options.maxSteps ?? this.testCase.steps.length + 1;
   }
 
   async run(): Promise<TestResult> {
@@ -41,13 +49,10 @@ export class TestTask {
       this.browser,
       join(this.screenshotDirectory, randomUUID())
     );
-    const llmClient = new TestStepClient(
-      this.testCase.steps.map((step) => step.action)
-    );
     const agent = new Agent({
       browser: reportingBrowser,
-      llmClient,
-      maxSteps: this.testCase.steps.length + 1
+      llmClient: this.llmClient,
+      maxSteps: this.maxSteps
     });
 
     try {

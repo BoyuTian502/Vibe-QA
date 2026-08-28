@@ -2,6 +2,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { formatHybridDiagnosticsMarkdown } from "./hybrid-diagnostics-reporter.js";
+import {
+  formatAdaptiveExecutionMarkdown,
+  formatAdaptiveExecutionSummary
+} from "./adaptive-reporter.js";
 import type {
   BenchmarkPerformanceMetrics,
   BenchmarkSuiteResult,
@@ -89,6 +93,9 @@ export function formatBenchmarkSummary(result: BenchmarkSuiteResult): string {
     "",
     formatPlannerComparison(metrics.plannerPerformance),
     ...(metrics.hybridRouting ? ["", formatHybridPlainSummary(result)] : []),
+    ...(metrics.adaptiveExecution
+      ? ["", formatAdaptiveExecutionSummary(metrics.adaptiveExecution)]
+      : []),
     "",
     "--------------------------------------------------",
     "Difficulty Breakdown",
@@ -220,6 +227,15 @@ export function formatBenchmarkMarkdownReport(result: BenchmarkSuiteResult): str
     ...(metrics.hybridDiagnostics
       ? ["", formatHybridDiagnosticsMarkdown(metrics.hybridDiagnostics)]
       : []),
+    ...(metrics.adaptiveExecution
+      ? [
+          "",
+          formatAdaptiveExecutionMarkdown(
+            metrics.adaptiveExecution,
+            controlledAdaptiveInterpretation(result)
+          )
+        ]
+      : []),
     "",
     "## Limitations",
     "",
@@ -230,6 +246,24 @@ export function formatBenchmarkMarkdownReport(result: BenchmarkSuiteResult): str
     "- The constrained Ollama strategy orders known safe steps; exploratory candidate ranking remains deterministic.",
     ""
   ].join("\n");
+}
+
+function controlledAdaptiveInterpretation(result: BenchmarkSuiteResult): string[] {
+  const adaptive = result.metrics.plannerPerformance.find(
+    (planner) => planner.planner === "adaptive"
+  );
+  const deterministic = result.metrics.plannerPerformance.find(
+    (planner) => planner.planner === "deterministic"
+  );
+  if (!adaptive || !result.metrics.adaptiveExecution) {
+    return ["No Adaptive performance sample is available."];
+  }
+  return [
+    `Controlled Adaptive success measured ${percentage(adaptive.taskSuccessRate)}${deterministic ? ` versus ${percentage(deterministic.taskSuccessRate)} for deterministic` : ""}.`,
+    `Adaptive duration measured ${seconds(adaptive.averageDurationMs)}${deterministic ? ` versus ${seconds(deterministic.averageDurationMs)} for deterministic` : ""}.`,
+    `The controlled-suite escalation rate was ${percentage(result.metrics.adaptiveExecution.escalationRate)}; lower is preferable when deterministic workflows continue to progress.`,
+    "No latency or quality advantage is claimed beyond these measured samples."
+  ];
 }
 
 function formatHybridPlainSummary(result: BenchmarkSuiteResult): string {

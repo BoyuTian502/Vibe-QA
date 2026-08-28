@@ -51,7 +51,7 @@ export function parseBenchmarkCliOptions(
     )
     .option(
       "--planner <planner>",
-      "use deterministic, ollama, or hybrid planning",
+      "use deterministic, ollama, hybrid, or adaptive planning",
       parsePlanner,
       "deterministic"
     )
@@ -106,7 +106,12 @@ function parseDifficulty(value: string): BenchmarkDifficulty {
 }
 
 function parsePlanner(value: string): BenchmarkPlanner {
-  if (value === "deterministic" || value === "ollama" || value === "hybrid") {
+  if (
+    value === "deterministic" ||
+    value === "ollama" ||
+    value === "hybrid" ||
+    value === "adaptive"
+  ) {
     return value;
   }
   throw new InvalidArgumentError(`unknown benchmark planner: ${value}`);

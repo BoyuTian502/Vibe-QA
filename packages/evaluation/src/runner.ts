@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { classifyBenchmarkRun } from "./classification.js";
+import { classifyBenchmarkRun, isSuccessfulClassification } from "./classification.js";
 import { aggregateBenchmarkMetrics } from "./metrics.js";
 import type {
   BenchmarkApplicationConfiguration,
@@ -108,7 +108,13 @@ export class BenchmarkRunner {
               routing: annotateRoutingRecommendation(
                 execution.routing,
                 controlledRecommendation(scenario)
-              )
+              ),
+              adaptive: execution.adaptive
+                ? {
+                    ...structuredClone(execution.adaptive),
+                    finalOutcome: isSuccessfulClassification(classification)
+                  }
+                : null
             });
           } catch (error) {
             runs.push({
@@ -131,7 +137,8 @@ export class BenchmarkRunner {
               durationMs: 0,
               safetyEvents: { allowed: 0, blocked: 0, approvalRequired: 0 },
               exploration: null,
-              routing: null
+              routing: null,
+              adaptive: null
             });
           }
         }
