@@ -76,7 +76,11 @@ export function aggregateBenchmarkMetrics(
         planner: run.planner,
         scenarioId: run.scenarioId,
         successful: isSuccessfulClassification(run.classification),
-        adaptive: run.adaptive
+        adaptive: run.adaptive,
+        hiddenBugDiscovered:
+          run.expectedBugId === null
+            ? null
+            : run.detectedBugIds.includes(run.expectedBugId)
       }))
     )
   };

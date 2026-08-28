@@ -2,6 +2,7 @@ import type {
   AdaptiveActionSummary,
   AdaptiveExecutionMetadata,
   AdaptiveHandoffSnapshot,
+  AdaptivePolicyVersion,
   AdaptiveProgressEvent
 } from "@vibeqa/adaptive-execution";
 import type { BrowserAction, Observation } from "@vibeqa/schemas";
@@ -437,6 +438,7 @@ export interface GeneralizationConfiguration {
   randomSeed: null;
   adaptiveDebugReplay: boolean;
   adaptivePostEscalationStepBudget: number | null;
+  adaptivePolicyVersion: AdaptivePolicyVersion;
 }
 
 export interface GeneralizationSuiteResult {

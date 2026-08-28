@@ -6,6 +6,8 @@ import {
 } from "@vibeqa/schemas";
 
 import { ProgressiveEscalationStrategy } from "./escalation-policy.js";
+import { DeterministicCompletionEvaluator } from "./completion-evaluator.js";
+import { OpportunityPreservationEvaluator } from "./opportunity-evaluator.js";
 import {
   DeterministicProgressEvaluator,
   pageFingerprint
@@ -15,7 +17,9 @@ import type {
   AdaptiveExecutionMetadata,
   AdaptiveHandoffSnapshot,
   AdaptivePlannerDecisionOutcome,
+  AdaptiveEscalationTiming,
   EscalationPolicyDecision,
+  OpportunityPreservationEvaluation,
   ProgressEvaluation,
   ProgressiveEscalationPolicyConfig
 } from "./types.js";
@@ -30,12 +34,20 @@ export interface AdaptiveExecutionControllerOptions {
   escalateWhenDeterministicExhausted?: boolean;
   maxSteps?: number;
   diagnosticPostEscalationStepBudget?: number;
+  opportunityPreservationEnabled?: boolean;
+  knownWorkflow?: boolean;
+  nullRetryLimit?: number;
+  opportunityEvaluator?: OpportunityPreservationEvaluator;
+  completionEvaluator?: DeterministicCompletionEvaluator;
 }
 
 export class AdaptiveExecutionController implements LLMClient {
   private readonly progress = new DeterministicProgressEvaluator();
   private readonly policy: ProgressiveEscalationStrategy;
+  private readonly opportunity: OpportunityPreservationEvaluator;
+  private readonly completion: DeterministicCompletionEvaluator;
   private readonly now: () => number;
+  private readonly nullRetryLimit: number;
   private phase: "deterministic" | "ollama" = "deterministic";
   private escalationCount = 0;
   private deterministicSteps = 0;
@@ -49,11 +61,21 @@ export class AdaptiveExecutionController implements LLMClient {
   constructor(private readonly options: AdaptiveExecutionControllerOptions) {
     this.policy =
       options.policy ?? new ProgressiveEscalationStrategy(options.policyConfig);
+    this.opportunity =
+      options.opportunityEvaluator ?? new OpportunityPreservationEvaluator();
+    this.completion =
+      options.completionEvaluator ?? new DeterministicCompletionEvaluator();
+    this.nullRetryLimit = options.nullRetryLimit ?? 1;
+    if (!Number.isInteger(this.nullRetryLimit) || this.nullRetryLimit < 0) {
+      throw new Error("Adaptive null retry limit must be a non-negative integer.");
+    }
     this.now = options.now ?? Date.now;
     this.startedAt = this.now();
     this.metadata = initialMetadata(
       options.maxSteps ?? null,
-      options.diagnosticPostEscalationStepBudget ?? null
+      options.diagnosticPostEscalationStepBudget ?? null,
+      options.opportunityPreservationEnabled ?? true,
+      this.nullRetryLimit
     );
   }
 
@@ -65,6 +87,18 @@ export class AdaptiveExecutionController implements LLMClient {
       lastActionSucceeded: true
     });
     this.updateStepCounts(snapshot.actionHistory.length);
+    const currentOpportunity = this.opportunity.evaluate({
+      goal: snapshot.goal,
+      observation: snapshot.observation,
+      actionHistory: snapshot.actionHistory,
+      proposedAction: null,
+      knownWorkflow: this.options.knownWorkflow
+    });
+    if (this.metadata.initialSafeCandidateCount === undefined) {
+      this.metadata.initialSafeCandidateCount =
+        currentOpportunity.safeUnexploredCandidates.length;
+      this.metadata.initialPageFingerprint = progress.currentFingerprint;
+    }
 
     if (this.phase === "deterministic") {
       if (hasTerminalEvidence(snapshot.observation)) {
@@ -81,20 +115,19 @@ export class AdaptiveExecutionController implements LLMClient {
       );
       this.recordProgress(progress, policyDecision);
       if (policyDecision.escalate) {
-        await this.tryEscalation(policyDecision, snapshot, prompt, progress);
+        await this.tryEscalation(
+          policyDecision,
+          snapshot,
+          prompt,
+          progress,
+          escalationTiming(policyDecision),
+          currentOpportunity
+        );
       }
     }
 
     if (this.phase === "ollama") {
-      if (this.diagnosticBudgetReached(snapshot)) {
-        return "null";
-      }
-      return await this.generateWith(
-        this.options.ollamaClient,
-        "ollama",
-        this.createEscalatedPrompt(prompt),
-        snapshot
-      );
+      return await this.generateOllama(snapshot, prompt);
     }
 
     const response = await this.generateWith(
@@ -103,6 +136,34 @@ export class AdaptiveExecutionController implements LLMClient {
       prompt,
       snapshot
     );
+    const proposedAction = parseResponseAction(response);
+    if (proposedAction) {
+      const opportunity = this.opportunity.evaluate({
+        goal: snapshot.goal,
+        observation: snapshot.observation,
+        actionHistory: snapshot.actionHistory,
+        proposedAction,
+        knownWorkflow: this.options.knownWorkflow
+      });
+      if (
+        this.metadata.policyVersion === "v2" &&
+        opportunity.shouldEscalateBeforeAction
+      ) {
+        const earlyDecision = opportunityDecision(opportunity);
+        this.recordProgress(progress, earlyDecision);
+        await this.tryEscalation(
+          earlyDecision,
+          snapshot,
+          prompt,
+          progress,
+          "early",
+          opportunity
+        );
+        if ((this.phase as string) === "ollama") {
+          return await this.generateOllama(snapshot, prompt);
+        }
+      }
+    }
     if (
       isNullAction(response) &&
       (this.options.escalateWhenDeterministicExhausted ?? true) &&
@@ -117,17 +178,16 @@ export class AdaptiveExecutionController implements LLMClient {
         this.escalationCount
       );
       this.recordProgress(progress, exhausted);
-      await this.tryEscalation(exhausted, snapshot, prompt, progress);
+      await this.tryEscalation(
+        exhausted,
+        snapshot,
+        prompt,
+        progress,
+        "exhaustion",
+        currentOpportunity
+      );
       if ((this.phase as string) === "ollama") {
-        if (this.diagnosticBudgetReached(snapshot)) {
-          return "null";
-        }
-        return await this.generateWith(
-          this.options.ollamaClient,
-          "ollama",
-          this.createEscalatedPrompt(prompt),
-          snapshot
-        );
+        return await this.generateOllama(snapshot, prompt);
       }
     }
     return response;
@@ -167,7 +227,9 @@ export class AdaptiveExecutionController implements LLMClient {
     decision: EscalationPolicyDecision,
     snapshot: RuntimePromptSnapshot,
     prompt: string,
-    progress: ProgressEvaluation
+    progress: ProgressEvaluation,
+    timing: AdaptiveEscalationTiming,
+    opportunity: OpportunityPreservationEvaluation
   ): Promise<void> {
     if (!decision.escalate || this.phase === "ollama") return;
     this.metadata.escalationRequired = true;
@@ -183,6 +245,8 @@ export class AdaptiveExecutionController implements LLMClient {
       this.metadata.escalationSucceeded = true;
       this.metadata.ollamaAvailable = true;
       this.metadata.plannerAfter = "ollama";
+      this.metadata.escalationTiming = timing;
+      this.metadata.opportunityPreservingEscalation = timing === "early";
       this.metadata.deterministicSteps = this.deterministicSteps;
       this.metadata.timeBeforeEscalationMs = Math.max(
         0,
@@ -192,12 +256,27 @@ export class AdaptiveExecutionController implements LLMClient {
         this.options.maxSteps,
         this.deterministicSteps
       );
+      const sensitiveValues = snapshot.actionHistory.flatMap((action) =>
+        action.type === "type" ? [action.value] : []
+      );
+      const safeOpportunity = sanitizeOpportunityEvaluation(
+        opportunity,
+        sensitiveValues
+      );
+      const handoffCandidates = opportunity.safeUnexploredCandidates.length;
+      this.metadata.safeCandidatesRemainingAtHandoff = handoffCandidates;
+      this.metadata.opportunityRetainedAtHandoff = opportunityRetention(
+        this.metadata.initialSafeCandidateCount ?? handoffCandidates,
+        handoffCandidates
+      );
+      this.metadata.opportunityEvaluationAtHandoff = safeOpportunity;
       this.metadata.handoffSnapshot = createHandoffSnapshot(
         snapshot,
         prompt,
         progress,
         decision,
-        this.metadata
+        this.metadata,
+        safeOpportunity
       );
     } catch (error) {
       this.metadata.ollamaAvailable = false;
@@ -244,8 +323,108 @@ export class AdaptiveExecutionController implements LLMClient {
         Math.max(0, this.now() - startedAt),
         safeError(error)
       );
+      if (planner === "ollama") {
+        this.metadata.postHandoffTerminationReason = "generation-error";
+      }
       throw error;
     }
+  }
+
+  private async generateOllama(
+    snapshot: RuntimePromptSnapshot,
+    agentPrompt: string
+  ): Promise<string> {
+    if (this.diagnosticBudgetReached(snapshot)) {
+      this.metadata.postHandoffTerminationReason = "budget-exhausted";
+      return "null";
+    }
+    if (this.metadata.policyVersion === "v1") {
+      return await this.generateWith(
+        this.options.ollamaClient,
+        "ollama",
+        createV1ContinuationPrompt(snapshot, this.metadata, agentPrompt),
+        snapshot
+      );
+    }
+
+    for (let retryAttempt = 0; retryAttempt <= this.nullRetryLimit; retryAttempt += 1) {
+      const opportunity = this.opportunity.evaluate({
+        goal: snapshot.goal,
+        observation: snapshot.observation,
+        actionHistory: snapshot.actionHistory,
+        proposedAction: null,
+        knownWorkflow: false
+      });
+      const response = await this.generateWith(
+        this.options.ollamaClient,
+        "ollama",
+        this.createEscalatedPrompt(snapshot, opportunity, retryAttempt),
+        snapshot
+      );
+      if (!isNullAction(response)) {
+        if (retryAttempt > 0) {
+          this.metadata.nullRecoveryCount = (this.metadata.nullRecoveryCount ?? 0) + 1;
+        }
+        this.metadata.postHandoffTerminationReason = "none";
+        return response;
+      }
+
+      const completion = this.completion.evaluate({
+        goal: snapshot.goal,
+        observation: snapshot.observation,
+        actionHistory: snapshot.actionHistory,
+        discoveredBugs: snapshot.discoveredBugs
+      });
+      const remainingBudget = remainingStepBudget(
+        this.options.maxSteps,
+        snapshot.actionHistory.length
+      );
+      const candidateCount = opportunity.safeUnexploredCandidates.length;
+      let classification: NonNullable<
+        AdaptiveExecutionMetadata["nullDecisionsAfterHandoff"]
+      >[number]["classification"];
+      if (completion.confirmed) classification = "legitimate-completion";
+      else if (remainingBudget === 0) classification = "budget-exhausted";
+      else if (candidateCount === 0) classification = "no-useful-action";
+      else if (retryAttempt >= this.nullRetryLimit) {
+        classification = "retry-limit-exhausted";
+      } else classification = "premature-unresolved-candidates";
+
+      this.metadata.nullDecisionsAfterHandoff?.push({
+        invocation: this.ollamaInvocationCount,
+        classification,
+        completionConfirmed: completion.confirmed,
+        safeCandidateCount: candidateCount,
+        remainingBudget,
+        retryAttempt
+      });
+
+      if (completion.confirmed) {
+        this.metadata.completionConfirmed = true;
+        this.metadata.postHandoffTerminationReason = "goal-complete";
+        return "null";
+      }
+      if (remainingBudget === 0) {
+        this.metadata.postHandoffTerminationReason = "budget-exhausted";
+        return "null";
+      }
+      if (candidateCount === 0) {
+        this.metadata.candidateExhausted = true;
+        this.metadata.postHandoffTerminationReason = "candidate-exhausted";
+        return "null";
+      }
+
+      this.metadata.completionGateRejectionCount =
+        (this.metadata.completionGateRejectionCount ?? 0) + 1;
+      if (retryAttempt >= this.nullRetryLimit) {
+        this.metadata.postHandoffTerminationReason = "null-retry-exhausted";
+        return "null";
+      }
+      this.metadata.nullRetryCount = (this.metadata.nullRetryCount ?? 0) + 1;
+    }
+
+    this.metadata.postHandoffTerminationReason = "null-retry-exhausted";
+    return "null";
   }
 
   private diagnosticBudgetReached(snapshot: RuntimePromptSnapshot): boolean {
@@ -302,17 +481,12 @@ export class AdaptiveExecutionController implements LLMClient {
     }
   }
 
-  private createEscalatedPrompt(prompt: string): string {
-    return [
-      "Adaptive execution context:",
-      "- Deterministic execution stopped making sufficient runtime progress.",
-      `- Escalation signals: ${this.metadata.escalationSignals.join(", ") || "runtime-stagnation"}.`,
-      "- Continue from the current browser and Agent state; do not restart the task.",
-      "- Do not return null merely because earlier deterministic actions were attempted.",
-      "- Return null only when the public goal is visibly satisfied, a requested failure is observed, or no useful safe action remains.",
-      "",
-      prompt
-    ].join("\n");
+  private createEscalatedPrompt(
+    snapshot: RuntimePromptSnapshot,
+    opportunity: OpportunityPreservationEvaluation,
+    retryAttempt: number
+  ): string {
+    return createContinuationPrompt(snapshot, this.metadata, opportunity, retryAttempt);
   }
 }
 
@@ -332,7 +506,9 @@ export function createCompletedDeterministicMetadata(
 
 function initialMetadata(
   maxSteps: number | null = null,
-  diagnosticPostEscalationStepBudget: number | null = null
+  diagnosticPostEscalationStepBudget: number | null = null,
+  opportunityPreservationEnabled = true,
+  nullRetryLimit = 1
 ): AdaptiveExecutionMetadata {
   return {
     requestedStrategy: "adaptive",
@@ -362,7 +538,23 @@ function initialMetadata(
     plannerDecisions: [],
     diagnosticReplay: diagnosticPostEscalationStepBudget !== null,
     diagnosticPostEscalationStepBudget,
-    diagnosticBudgetExhausted: false
+    diagnosticBudgetExhausted: false,
+    policyVersion: opportunityPreservationEnabled ? "v2" : "v1",
+    escalationTiming: "none",
+    opportunityPreservingEscalation: false,
+    initialSafeCandidateCount: undefined,
+    initialPageFingerprint: undefined,
+    safeCandidatesRemainingAtHandoff: undefined,
+    opportunityRetainedAtHandoff: undefined,
+    opportunityEvaluationAtHandoff: null,
+    nullDecisionsAfterHandoff: [],
+    nullRetryCount: 0,
+    nullRecoveryCount: 0,
+    completionGateRejectionCount: 0,
+    completionConfirmed: false,
+    candidateExhausted: false,
+    postHandoffTerminationReason: "none",
+    nullRetryLimit
   };
 }
 
@@ -414,7 +606,8 @@ function createHandoffSnapshot(
   prompt: string,
   progress: ProgressEvaluation,
   decision: EscalationPolicyDecision,
-  metadata: AdaptiveExecutionMetadata
+  metadata: AdaptiveExecutionMetadata,
+  opportunity: OpportunityPreservationEvaluation
 ): AdaptiveHandoffSnapshot {
   const sensitiveValues = snapshot.actionHistory.flatMap((action) =>
     action.type === "type" ? [action.value] : []
@@ -476,7 +669,13 @@ function createHandoffSnapshot(
       recentActionTypes: snapshot.actionHistory.slice(-5).map((action) => action.type)
     },
     promptCharacterCount: prompt.length,
-    actionHistoryCharacterCount: JSON.stringify(priorActions).length
+    actionHistoryCharacterCount: JSON.stringify(priorActions).length,
+    opportunity: structuredClone(opportunity),
+    unexploredSafeCandidates: opportunity.safeUnexploredCandidates.map((candidate) =>
+      structuredClone(candidate)
+    ),
+    opportunityRetained: metadata.opportunityRetainedAtHandoff,
+    stateTransitionSummary: compactStateTransitions(metadata)
   };
 }
 
@@ -493,6 +692,220 @@ function summarizeResponse(response: string): AdaptiveActionSummary | null {
   } catch {
     return null;
   }
+}
+
+function parseResponseAction(response: string): BrowserAction | null {
+  if (isNullAction(response) || response.length === 0) return null;
+  try {
+    return BrowserActionSchema.parse(JSON.parse(response));
+  } catch {
+    return null;
+  }
+}
+
+function escalationTiming(
+  decision: EscalationPolicyDecision
+): AdaptiveEscalationTiming {
+  if (decision.signals.includes("opportunity-preservation")) return "early";
+  if (decision.signals.includes("exploration-exhausted")) return "exhaustion";
+  return "stagnation";
+}
+
+function opportunityDecision(
+  opportunity: OpportunityPreservationEvaluation
+): EscalationPolicyDecision {
+  const signals: EscalationPolicyDecision["signals"] = [
+    "opportunity-preservation",
+    ...(opportunity.discoveryOrientedGoal
+      ? (["exploratory-objective"] as const)
+      : (["semantic-uncertainty"] as const)),
+    "high-branching-state",
+    "next-action-narrows-state"
+  ];
+  return {
+    escalate: true,
+    signals,
+    reason: `Opportunity-preserving handoff before a narrowing deterministic action (${opportunity.safeUnexploredCandidates.length} safe unexplored candidates).`
+  };
+}
+
+function opportunityRetention(
+  initialCandidates: number,
+  currentCandidates: number
+): number {
+  if (initialCandidates <= 0) return currentCandidates > 0 ? 1 : 0;
+  return Math.min(1, currentCandidates / initialCandidates);
+}
+
+function createContinuationPrompt(
+  snapshot: RuntimePromptSnapshot,
+  metadata: AdaptiveExecutionMetadata,
+  opportunity: OpportunityPreservationEvaluation,
+  retryAttempt: number
+): string {
+  const sensitiveValues = snapshot.actionHistory.flatMap((action) =>
+    action.type === "type" ? [action.value] : []
+  );
+  const sanitize = (value: string): string =>
+    sanitizeDiagnosticText(value, sensitiveValues);
+  const observation = sanitizeObservation(snapshot.observation, sanitize);
+  const actions = snapshot.actionHistory
+    .slice(-5)
+    .map((action) => sanitizeContinuationAction(action, sanitize));
+  const candidates = opportunity.safeUnexploredCandidates
+    .slice(0, 12)
+    .map(
+      (candidate) =>
+        `${candidate.action.type}:${candidate.action.target ? sanitize(candidate.action.target) : "none"} (${sanitize(candidate.label)}; ${candidate.category})`
+    );
+  const retry =
+    retryAttempt > 0
+      ? [
+          `- A previous null decision was rejected because ${candidates.length} safe unexplored candidate(s) remain.`,
+          "- Reconsider the unresolved candidates and choose one useful safe action, or return null only with visible completion evidence."
+        ]
+      : [];
+  return [
+    "Adaptive execution context:",
+    `- Handoff mode: ${metadata.escalationTiming ?? "stagnation"}.`,
+    `- Handoff reason: ${sanitize(metadata.escalationReason ?? "Runtime escalation policy requested continuation.")}`,
+    "- Continue from the current browser and Agent state; do not restart the task.",
+    `- Remaining action budget at handoff: ${metadata.remainingStepBudgetAtHandoff ?? "unknown"}.`,
+    `- Safe unexplored candidates with exact targets: ${JSON.stringify(candidates)}.`,
+    "- Use only an exact selector or URL shown in the current observation and candidate list.",
+    `- Progress summary: ${compactStateTransitions(metadata).join(" ") || "No prior transition summary."}`,
+    "- Do not return null merely because earlier deterministic actions were attempted.",
+    "- Return null only when the public goal is visibly satisfied, a requested failure is observed, or no useful safe action remains.",
+    ...retry,
+    `Goal: ${sanitize(snapshot.goal)}`,
+    `Step: ${snapshot.actionHistory.length}`,
+    `Current observation: ${JSON.stringify(observation)}`,
+    `Previous actions: ${JSON.stringify(actions)}`,
+    `Discovered bugs: ${JSON.stringify(snapshot.discoveredBugs.map(sanitize))}`
+  ].join("\n");
+}
+
+function createV1ContinuationPrompt(
+  snapshot: RuntimePromptSnapshot,
+  metadata: AdaptiveExecutionMetadata,
+  agentPrompt: string
+): string {
+  const sensitiveValues = snapshot.actionHistory.flatMap((action) =>
+    action.type === "type" ? [action.value] : []
+  );
+  const sanitize = (value: string): string =>
+    sanitizeDiagnosticText(value, sensitiveValues);
+  return [
+    "Adaptive execution context:",
+    "- Deterministic execution stopped making sufficient runtime progress.",
+    `- Escalation signals: ${metadata.escalationSignals.join(", ") || "runtime-stagnation"}.`,
+    "- Continue from the current browser and Agent state; do not restart the task.",
+    "- Do not return null merely because earlier deterministic actions were attempted.",
+    "- Return null only when the public goal is visibly satisfied, a requested failure is observed, or no useful safe action remains.",
+    "",
+    sanitize(agentPrompt)
+  ].join("\n");
+}
+
+function sanitizeObservation(
+  observation: Observation,
+  sanitize: (value: string) => string
+): Observation {
+  return {
+    ...observation,
+    url: sanitize(observation.url),
+    title: sanitize(observation.title),
+    metadata: {
+      ...observation.metadata,
+      url: sanitize(observation.metadata.url),
+      title: sanitize(observation.metadata.title)
+    },
+    consoleErrors: observation.consoleErrors.map((error) => ({
+      ...error,
+      text: sanitize(error.text),
+      location: error.location
+        ? { ...error.location, url: sanitize(error.location.url) }
+        : null
+    })),
+    accessibility: {
+      ...observation.accessibility,
+      headings: observation.accessibility.headings.map((heading) => ({
+        ...heading,
+        text: sanitize(heading.text)
+      })),
+      landmarks: observation.accessibility.landmarks.map((landmark) => ({
+        ...landmark,
+        name: landmark.name ? sanitize(landmark.name) : null
+      }))
+    },
+    elements: observation.elements
+      .filter((element) => element.visible)
+      .map((element) => ({
+        ...element,
+        accessibleName: element.accessibleName
+          ? sanitize(element.accessibleName)
+          : null,
+        text: sanitize(element.text),
+        selector: sanitize(element.selector),
+        href: element.href ? sanitize(element.href) : null
+      })),
+    textSample: sanitize(observation.textSample),
+    screenshotPath: observation.screenshotPath
+      ? sanitize(observation.screenshotPath)
+      : null
+  };
+}
+
+function sanitizeContinuationAction(
+  action: BrowserAction,
+  sanitize: (value: string) => string
+): BrowserAction {
+  if (action.type === "type") {
+    return { ...action, selector: sanitize(action.selector), value: "[REDACTED]" };
+  }
+  if (action.type === "assert") {
+    return {
+      ...action,
+      selector: sanitize(action.selector),
+      containsText: sanitize(action.containsText)
+    };
+  }
+  if ("selector" in action) return { ...action, selector: sanitize(action.selector) };
+  if ("url" in action) return { ...action, url: sanitize(action.url) };
+  if (action.type === "screenshot" && action.path) {
+    return { ...action, path: sanitize(action.path) };
+  }
+  return { ...action };
+}
+
+function compactStateTransitions(metadata: AdaptiveExecutionMetadata): string[] {
+  return metadata.progressEvents.slice(-3).map((event) => {
+    const changes = [
+      event.urlChanged ? "URL changed" : null,
+      event.visibleTextChanged ? "visible text changed" : null,
+      event.interactiveElementsChanged ? "controls changed" : null
+    ].filter((value): value is string => value !== null);
+    return `Step ${event.step}: ${event.progressed ? "progress" : "no progress"}${changes.length > 0 ? ` (${changes.join(", ")})` : ""}.`;
+  });
+}
+
+function sanitizeOpportunityEvaluation(
+  opportunity: OpportunityPreservationEvaluation,
+  sensitiveValues: readonly string[]
+): OpportunityPreservationEvaluation {
+  const sanitize = (value: string): string =>
+    sanitizeDiagnosticText(value, sensitiveValues);
+  return {
+    ...structuredClone(opportunity),
+    safeUnexploredCandidates: opportunity.safeUnexploredCandidates.map((candidate) => ({
+      ...candidate,
+      label: sanitize(candidate.label),
+      action: {
+        ...candidate.action,
+        target: candidate.action.target ? sanitize(candidate.action.target) : null
+      }
+    }))
+  };
 }
 
 function remainingStepBudget(

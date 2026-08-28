@@ -1,7 +1,8 @@
 import { Agent, type AgentTrace, type BrowserController } from "@vibeqa/agent-core";
 import {
   AdaptiveExecutionController,
-  type AdaptiveExecutionMetadata
+  type AdaptiveExecutionMetadata,
+  type AdaptivePolicyVersion
 } from "@vibeqa/adaptive-execution";
 import type { BenchmarkServer } from "@vibeqa/benchmark-app";
 import { PlaywrightBrowserController } from "@vibeqa/browser-playwright";
@@ -65,6 +66,7 @@ export interface GeneralizationPlaywrightExecutorOptions {
   now?: () => number;
   adaptiveDebugReplay?: boolean;
   adaptivePostEscalationStepBudget?: number;
+  adaptivePolicyVersion?: AdaptivePolicyVersion;
   onRunStart?: (
     scenario: GeneralizationScenario,
     repetition: number,
@@ -158,7 +160,9 @@ export class GeneralizationPlaywrightExecutor implements GeneralizationScenarioE
           ),
           diagnosticPostEscalationStepBudget: this.options.adaptiveDebugReplay
             ? this.options.adaptivePostEscalationStepBudget
-            : undefined
+            : undefined,
+          opportunityPreservationEnabled: this.options.adaptivePolicyVersion !== "v1",
+          knownWorkflow: false
         });
         await plannerBrowser.navigate(plannerInput.startUrl);
         const agent = new Agent({

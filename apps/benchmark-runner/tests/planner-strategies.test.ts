@@ -69,7 +69,8 @@ describe("benchmark planner configuration", () => {
   it("enables isolated Adaptive replay budgets without changing defaults", () => {
     expect(parseBenchmarkCliOptions(["--planner", "adaptive"])).toMatchObject({
       adaptiveDebugReplay: false,
-      adaptivePostEscalationStepBudget: null
+      adaptivePostEscalationStepBudget: null,
+      adaptivePolicyVersion: "v2"
     });
     expect(
       parseBenchmarkCliOptions([
@@ -88,6 +89,13 @@ describe("benchmark planner configuration", () => {
     expect(() => parseBenchmarkCliOptions(["--post-escalation-steps", "3"])).toThrow(
       "requires --adaptive-debug-replay"
     );
+    expect(
+      parseBenchmarkCliOptions(["--planner", "adaptive", "--adaptive-policy", "v1"])
+        .adaptivePolicyVersion
+    ).toBe("v1");
+    expect(() =>
+      parseBenchmarkCliOptions(["--adaptive-policy", "experimental"])
+    ).toThrow("unknown Adaptive policy version");
   });
 
   it("preserves scenario difficulty metadata", () => {

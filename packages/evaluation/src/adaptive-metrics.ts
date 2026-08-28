@@ -13,6 +13,7 @@ export interface AdaptiveMetricSource {
   scenarioId: string;
   successful: boolean;
   adaptive?: AdaptiveExecutionMetadata | null;
+  hiddenBugDiscovered?: boolean | null;
 }
 
 const UTILITIES: readonly EscalationUtility[] = [
@@ -33,6 +34,37 @@ export function aggregateAdaptiveExecutionMetrics(
 
   const escalated = adaptiveRuns.filter((run) => run.adaptive.escalationOccurred);
   const successfulEscalations = escalated.filter((run) => run.successful);
+  const earlyEscalations = escalated.filter(
+    (run) => run.adaptive.escalationTiming === "early"
+  );
+  const stagnationEscalations = escalated.filter(
+    (run) => run.adaptive.escalationTiming === "stagnation"
+  );
+  const opportunityEscalations = escalated.filter(
+    (run) => run.adaptive.opportunityPreservingEscalation === true
+  );
+  const postHandoffDecisions = escalated.flatMap((run) =>
+    (run.adaptive.plannerDecisions ?? []).filter(
+      (decision) => decision.phase === "ollama"
+    )
+  );
+  const nullDecisions = postHandoffDecisions.filter(
+    (decision) => decision.outcome === "null_action"
+  );
+  const rejectedNulls = sum(
+    escalated,
+    (run) => run.adaptive.completionGateRejectionCount ?? 0
+  );
+  const recoveredNulls = sum(escalated, (run) => run.adaptive.nullRecoveryCount ?? 0);
+  const earlyHiddenRuns = earlyEscalations.filter(
+    (run) => run.hiddenBugDiscovered !== null && run.hiddenBugDiscovered !== undefined
+  );
+  const lateHiddenRuns = escalated.filter(
+    (run) =>
+      run.adaptive.escalationTiming !== "early" &&
+      run.hiddenBugDiscovered !== null &&
+      run.hiddenBugDiscovered !== undefined
+  );
   const deterministicRates = scenarioSuccessRates(
     runs.filter((run) => run.planner === "deterministic")
   );
@@ -95,7 +127,70 @@ export function aggregateAdaptiveExecutionMetrics(
         projectedEscalations,
         projectedEscalationRate: rate(projectedEscalations, adaptiveRuns.length)
       };
-    })
+    }),
+    earlyEscalationCount: earlyEscalations.length,
+    earlyEscalationRate: rate(earlyEscalations.length, adaptiveRuns.length),
+    stagnationEscalationCount: stagnationEscalations.length,
+    stagnationEscalationRate: rate(stagnationEscalations.length, adaptiveRuns.length),
+    opportunityPreservingEscalationCount: opportunityEscalations.length,
+    opportunityPreservingEscalationRate: rate(
+      opportunityEscalations.length,
+      adaptiveRuns.length
+    ),
+    opportunityRetainedAtHandoff: distribution(
+      escalated.flatMap((run) =>
+        run.adaptive.opportunityRetainedAtHandoff === undefined
+          ? []
+          : [run.adaptive.opportunityRetainedAtHandoff]
+      )
+    ),
+    safeCandidatesRemainingAtHandoff: distribution(
+      escalated.flatMap((run) =>
+        run.adaptive.safeCandidatesRemainingAtHandoff === undefined
+          ? []
+          : [run.adaptive.safeCandidatesRemainingAtHandoff]
+      )
+    ),
+    plannerNullDecisionCount: nullDecisions.length,
+    postHandoffPlannerDecisionCount: postHandoffDecisions.length,
+    plannerNullRateAfterHandoff: rate(
+      nullDecisions.length,
+      postHandoffDecisions.length
+    ),
+    nullRecoveryCount: recoveredNulls,
+    nullRecoveryRate: rate(recoveredNulls, rejectedNulls),
+    completionGateRejectionCount: rejectedNulls,
+    postHandoffActionUtilization: distribution(
+      escalated.flatMap((run) => {
+        const available = run.adaptive.remainingStepBudgetAtHandoff;
+        return typeof available !== "number" || available <= 0
+          ? []
+          : [Math.min(1, run.adaptive.ollamaSteps / available)];
+      })
+    ),
+    hiddenDiscoveryAfterEarlyHandoffCount: earlyHiddenRuns.filter(
+      (run) => run.hiddenBugDiscovered === true
+    ).length,
+    hiddenDiscoveryAfterEarlyHandoffRate: rate(
+      earlyHiddenRuns.filter((run) => run.hiddenBugDiscovered === true).length,
+      earlyHiddenRuns.length
+    ),
+    hiddenDiscoveryAfterLateHandoffCount: lateHiddenRuns.filter(
+      (run) => run.hiddenBugDiscovered === true
+    ).length,
+    hiddenDiscoveryAfterLateHandoffRate: rate(
+      lateHiddenRuns.filter((run) => run.hiddenBugDiscovered === true).length,
+      lateHiddenRuns.length
+    ),
+    handoffStateSimilarityToInitialStateRate: rate(
+      escalated.filter(
+        (run) =>
+          run.adaptive.initialPageFingerprint !== undefined &&
+          run.adaptive.handoffSnapshot?.pageFingerprint ===
+            run.adaptive.initialPageFingerprint
+      ).length,
+      escalated.length
+    )
   };
 }
 

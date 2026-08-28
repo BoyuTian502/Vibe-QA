@@ -68,6 +68,37 @@ describe("Adaptive execution integration", () => {
       ollamaInvocationCount: 0
     });
   });
+
+  it("preserves the authenticated browser session during an early handoff", async () => {
+    const browser = new StatefulBrowser(highOpportunityObservation());
+    const controller = new AdaptiveExecutionController({
+      deterministicClient: new SequenceClient([
+        JSON.stringify({
+          type: "navigate",
+          url: "http://site.test/settings"
+        })
+      ]),
+      ollamaClient: new SequenceClient([
+        JSON.stringify({ type: "click", selector: "#view-activity" }),
+        "null",
+        "null"
+      ]),
+      verifyOllamaAvailability: async () => {},
+      maxSteps: 4
+    });
+    const agent = new Agent({ browser, llmClient: controller, maxSteps: 4 });
+
+    await agent.run("Explore the authenticated dashboard for failures");
+
+    expect(browser.authenticated).toBe(true);
+    expect(browser.calls).toContain("#view-activity");
+    expect(browser.calls).not.toContain("http://site.test/settings");
+    expect(controller.getMetadata()).toMatchObject({
+      escalationTiming: "early",
+      escalationStep: 0,
+      opportunityPreservingEscalation: true
+    });
+  });
 });
 
 class SequenceClient implements LLMClient {
@@ -88,11 +119,15 @@ class StatefulBrowser implements BrowserController {
   readonly authenticated = true;
   readonly calls: string[] = [];
 
+  constructor(private readonly observed: Observation = observation()) {}
+
   async observe(): Promise<Observation> {
-    return observation();
+    return structuredClone(this.observed);
   }
   async goto(): Promise<void> {}
-  async navigate(): Promise<void> {}
+  async navigate(url: string): Promise<void> {
+    this.calls.push(url);
+  }
   async click(selector: string): Promise<void> {
     this.calls.push(selector);
   }
@@ -133,5 +168,66 @@ function observation(): Observation {
     })),
     textSample: "Authenticated workspace dashboard",
     screenshotPath: null
+  };
+}
+
+function highOpportunityObservation(): Observation {
+  const value = observation();
+  value.accessibility = {
+    headings: [
+      { level: 1, text: "Workspace" },
+      { level: 2, text: "Projects" }
+    ],
+    landmarks: [
+      { role: "navigation", name: "Primary" },
+      { role: "main", name: "Dashboard" }
+    ],
+    interactiveElementCount: 6
+  };
+  value.elements = [
+    link("settings", "Settings", "http://site.test/settings"),
+    link("project", "Project", "http://site.test/projects/alpha"),
+    button("view-activity", "Activity", "tab"),
+    button("refresh", "Refresh insights"),
+    button("logout", "Log out"),
+    button("help", "Workspace help")
+  ];
+  return value;
+}
+
+function link(
+  id: string,
+  label: string,
+  href: string
+): Observation["elements"][number] {
+  return {
+    id,
+    tagName: "a",
+    role: "link",
+    accessibleName: label,
+    text: label,
+    visible: true,
+    enabled: true,
+    editable: false,
+    selector: `#${id}`,
+    href
+  };
+}
+
+function button(
+  id: string,
+  label: string,
+  role = "button"
+): Observation["elements"][number] {
+  return {
+    id,
+    tagName: "button",
+    role,
+    accessibleName: label,
+    text: label,
+    visible: true,
+    enabled: true,
+    editable: false,
+    selector: `#${id}`
   };
 }

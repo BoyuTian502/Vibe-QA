@@ -2,6 +2,10 @@ import type { BrowserAction, Observation } from "@vibeqa/schemas";
 
 export type AdaptivePlannerPhase = "deterministic" | "ollama";
 
+export type AdaptivePolicyVersion = "v1" | "v2";
+
+export type AdaptiveEscalationTiming = "none" | "early" | "stagnation" | "exhaustion";
+
 export type EscalationSignal =
   | "repeated-state"
   | "no-progress"
@@ -9,7 +13,68 @@ export type EscalationSignal =
   | "evaluation-failure"
   | "recovery-stalled"
   | "exploration-exhausted"
-  | "deterministic-budget-exhausted";
+  | "deterministic-budget-exhausted"
+  | "opportunity-preservation"
+  | "exploratory-objective"
+  | "semantic-uncertainty"
+  | "high-branching-state"
+  | "next-action-narrows-state";
+
+export type OpportunityRisk = "low" | "medium" | "high";
+
+export type OpportunityReason =
+  | "known-workflow"
+  | "exploratory-objective"
+  | "semantic-uncertainty"
+  | "high-branching-state"
+  | "multiple-navigation-destinations"
+  | "diverse-controls"
+  | "multiple-page-regions"
+  | "next-action-narrows-state"
+  | "limited-unexplored-opportunity";
+
+export interface OpportunityCandidate {
+  action: AdaptiveActionSummary;
+  label: string;
+  category: string;
+}
+
+export interface OpportunityPreservationEvaluation {
+  risk: OpportunityRisk;
+  reasons: OpportunityReason[];
+  score: number;
+  discoveryOrientedGoal: boolean;
+  semanticJudgmentGoal: boolean;
+  highBranchingState: boolean;
+  nextActionNarrowsState: boolean;
+  safeUnexploredCandidates: OpportunityCandidate[];
+  distinctNavigationDestinations: number;
+  semanticControlDiversity: number;
+  unexploredPageRegions: number;
+  shouldEscalateBeforeAction: boolean;
+}
+
+export interface SemanticCompletionEvaluation {
+  confirmed: boolean;
+  reason: string;
+  evidence: string[];
+}
+
+export type AdaptiveNullDecisionClassification =
+  | "legitimate-completion"
+  | "no-useful-action"
+  | "premature-unresolved-candidates"
+  | "budget-exhausted"
+  | "retry-limit-exhausted";
+
+export interface AdaptiveNullDecision {
+  invocation: number;
+  classification: AdaptiveNullDecisionClassification;
+  completionConfirmed: boolean;
+  safeCandidateCount: number;
+  remainingBudget: number | null;
+  retryAttempt: number;
+}
 
 export interface ProgressiveEscalationPolicyConfig {
   maxDeterministicStepsBeforeEscalation: number;
@@ -116,6 +181,10 @@ export interface AdaptiveHandoffSnapshot {
   };
   promptCharacterCount: number;
   actionHistoryCharacterCount: number;
+  opportunity?: OpportunityPreservationEvaluation;
+  unexploredSafeCandidates?: OpportunityCandidate[];
+  opportunityRetained?: number;
+  stateTransitionSummary?: string[];
 }
 
 export type AdaptivePlannerDecisionOutcome =
@@ -163,6 +232,28 @@ export interface AdaptiveExecutionMetadata {
   diagnosticReplay: boolean;
   diagnosticPostEscalationStepBudget: number | null;
   diagnosticBudgetExhausted: boolean;
+  policyVersion?: AdaptivePolicyVersion;
+  escalationTiming?: AdaptiveEscalationTiming;
+  opportunityPreservingEscalation?: boolean;
+  initialSafeCandidateCount?: number;
+  initialPageFingerprint?: string;
+  safeCandidatesRemainingAtHandoff?: number;
+  opportunityRetainedAtHandoff?: number;
+  opportunityEvaluationAtHandoff?: OpportunityPreservationEvaluation | null;
+  nullDecisionsAfterHandoff?: AdaptiveNullDecision[];
+  nullRetryCount?: number;
+  nullRecoveryCount?: number;
+  completionGateRejectionCount?: number;
+  completionConfirmed?: boolean;
+  candidateExhausted?: boolean;
+  postHandoffTerminationReason?:
+    | "none"
+    | "goal-complete"
+    | "candidate-exhausted"
+    | "budget-exhausted"
+    | "null-retry-exhausted"
+    | "generation-error";
+  nullRetryLimit?: number;
 }
 
 export type EscalationUtility =

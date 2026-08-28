@@ -205,12 +205,17 @@ describe("generalization robustness reporting", () => {
     const report = formatGeneralizationMarkdownReport(result);
 
     expect(report).toContain("Benchmark V5 - Adaptive Progressive Escalation");
+    expect(report).toContain(
+      "Adaptive V2 - Opportunity-Preserving Progressive Escalation"
+    );
     expect(report).toContain("Escalation rate: 100.0% (1)");
     expect(report).toContain("Avoided LLM rate: 0.0% (0)");
     expect(report).toContain("Successful escalation rate: 100.0% (1/1)");
     expect(report).toContain("USEFUL_ESCALATION: 1");
     expect(report).toContain("conservative");
     expect(report).toContain("Adaptive Generalization Performance");
+    expect(report).toContain("Planner null rate after handoff");
+    expect(report).toContain("Opportunity retained at handoff");
   });
 });
 

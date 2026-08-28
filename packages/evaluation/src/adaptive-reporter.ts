@@ -10,7 +10,11 @@ export function formatAdaptiveExecutionSummary(
     `Successful escalation rate: ${percentage(metrics.successfulEscalationRate)} (${metrics.successfulEscalationCount}/${metrics.escalationCount})`,
     `Ollama invocations: ${metrics.ollamaInvocationCount}`,
     `Mean steps before escalation: ${decimal(metrics.preEscalationSteps.mean)}`,
-    `Mean steps after escalation: ${decimal(metrics.postEscalationSteps.mean)}`
+    `Mean steps after escalation: ${decimal(metrics.postEscalationSteps.mean)}`,
+    `Early / stagnation escalations: ${metrics.earlyEscalationCount} / ${metrics.stagnationEscalationCount}`,
+    `Opportunity retained at handoff: ${percentage(metrics.opportunityRetainedAtHandoff.mean)}`,
+    `Planner null rate after handoff: ${percentage(metrics.plannerNullRateAfterHandoff)}`,
+    `Null recovery rate: ${percentage(metrics.nullRecoveryRate)}`
   ].join("\n");
 }
 
@@ -22,6 +26,10 @@ export function formatAdaptiveExecutionMarkdown(
     "## Benchmark V5 - Adaptive Progressive Escalation",
     "",
     'Research question: "Can adaptive escalation retain deterministic efficiency while invoking Ollama only when runtime progress signals indicate it is useful?"',
+    "",
+    "### Adaptive V2 - Opportunity-Preserving Progressive Escalation",
+    "",
+    'V2 question: "Can Adaptive hand off before deterministic execution consumes valuable exploration opportunity?"',
     "",
     "### Adaptive Execution Summary",
     "",
@@ -35,6 +43,18 @@ export function formatAdaptiveExecutionMarkdown(
     `- Post-escalation steps, mean / median: ${decimal(metrics.postEscalationSteps.mean)} / ${decimal(metrics.postEscalationSteps.median)}`,
     `- Time before escalation, mean / median: ${seconds(metrics.timeBeforeEscalationMs.mean)} / ${seconds(metrics.timeBeforeEscalationMs.median)}`,
     `- Time after escalation, mean / median: ${seconds(metrics.timeAfterEscalationMs.mean)} / ${seconds(metrics.timeAfterEscalationMs.median)}`,
+    `- Early escalation rate: ${percentage(metrics.earlyEscalationRate)} (${metrics.earlyEscalationCount})`,
+    `- Stagnation escalation rate: ${percentage(metrics.stagnationEscalationRate)} (${metrics.stagnationEscalationCount})`,
+    `- Opportunity-preserving escalation rate: ${percentage(metrics.opportunityPreservingEscalationRate)} (${metrics.opportunityPreservingEscalationCount})`,
+    `- Opportunity retained at handoff, mean / median: ${percentage(metrics.opportunityRetainedAtHandoff.mean)} / ${percentage(metrics.opportunityRetainedAtHandoff.median)}`,
+    `- Safe candidates remaining at handoff, mean / median: ${decimal(metrics.safeCandidatesRemainingAtHandoff.mean)} / ${decimal(metrics.safeCandidatesRemainingAtHandoff.median)}`,
+    `- Planner null rate after handoff: ${percentage(metrics.plannerNullRateAfterHandoff)} (${metrics.plannerNullDecisionCount}/${metrics.postHandoffPlannerDecisionCount})`,
+    `- Null recovery rate: ${percentage(metrics.nullRecoveryRate)} (${metrics.nullRecoveryCount}/${metrics.completionGateRejectionCount})`,
+    `- Completion-gate rejections: ${metrics.completionGateRejectionCount}`,
+    `- Post-handoff action utilization, mean / median: ${percentage(metrics.postHandoffActionUtilization.mean)} / ${percentage(metrics.postHandoffActionUtilization.median)}`,
+    `- Hidden discovery after early handoff: ${percentage(metrics.hiddenDiscoveryAfterEarlyHandoffRate)} (${metrics.hiddenDiscoveryAfterEarlyHandoffCount})`,
+    `- Hidden discovery after late handoff: ${percentage(metrics.hiddenDiscoveryAfterLateHandoffRate)} (${metrics.hiddenDiscoveryAfterLateHandoffCount})`,
+    `- Handoff-state similarity to the Adaptive initial state: ${percentage(metrics.handoffStateSimilarityToInitialStateRate)}`,
     "",
     "### Escalation Utility",
     "",

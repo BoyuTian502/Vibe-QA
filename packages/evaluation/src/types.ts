@@ -183,6 +183,26 @@ export interface AdaptiveExecutionMetrics {
   utilityCounts: Record<EscalationUtility, number>;
   unclassifiedRuns: number;
   thresholdAnalysis: AdaptiveThresholdAnalysis[];
+  earlyEscalationCount: number;
+  earlyEscalationRate: number;
+  stagnationEscalationCount: number;
+  stagnationEscalationRate: number;
+  opportunityPreservingEscalationCount: number;
+  opportunityPreservingEscalationRate: number;
+  opportunityRetainedAtHandoff: DistributionStatistics;
+  safeCandidatesRemainingAtHandoff: DistributionStatistics;
+  plannerNullDecisionCount: number;
+  postHandoffPlannerDecisionCount: number;
+  plannerNullRateAfterHandoff: number;
+  nullRecoveryCount: number;
+  nullRecoveryRate: number;
+  completionGateRejectionCount: number;
+  postHandoffActionUtilization: DistributionStatistics;
+  hiddenDiscoveryAfterEarlyHandoffCount: number;
+  hiddenDiscoveryAfterEarlyHandoffRate: number;
+  hiddenDiscoveryAfterLateHandoffCount: number;
+  hiddenDiscoveryAfterLateHandoffRate: number;
+  handoffStateSimilarityToInitialStateRate: number;
 }
 
 export type BenchmarkClassification =

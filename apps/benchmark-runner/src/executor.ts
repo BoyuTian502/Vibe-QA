@@ -2,7 +2,8 @@ import type { BenchmarkServer } from "@vibeqa/benchmark-app";
 import {
   AdaptiveExecutionController,
   createCompletedDeterministicMetadata,
-  type AdaptiveExecutionMetadata
+  type AdaptiveExecutionMetadata,
+  type AdaptivePolicyVersion
 } from "@vibeqa/adaptive-execution";
 import type { BrowserController } from "@vibeqa/agent-core";
 import { PlaywrightBrowserController } from "@vibeqa/browser-playwright";
@@ -38,6 +39,7 @@ export interface BenchmarkPlaywrightExecutorOptions {
   ollamaClient?: LLMClient;
   ollamaStrategy?: OllamaBenchmarkPlannerStrategy;
   now?: () => number;
+  adaptivePolicyVersion?: AdaptivePolicyVersion;
   onRunStart?: (
     scenario: BenchmarkScenario,
     repetition: number,
@@ -134,6 +136,8 @@ export class BenchmarkPlaywrightExecutor implements BenchmarkScenarioExecutor {
             await this.options.ollamaStrategy?.verifyAvailability();
           },
           maxSteps: scenario.maxSteps,
+          knownWorkflow: true,
+          opportunityPreservationEnabled: this.options.adaptivePolicyVersion !== "v1",
           policyConfig: {
             maxDeterministicStepsBeforeEscalation: scenario.maxSteps
           },

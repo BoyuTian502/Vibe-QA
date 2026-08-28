@@ -3,6 +3,7 @@ import {
   type BenchmarkMode,
   type BenchmarkPlanner
 } from "@vibeqa/evaluation";
+import type { AdaptivePolicyVersion } from "@vibeqa/adaptive-execution";
 import { Command, InvalidArgumentError } from "commander";
 
 export interface BenchmarkCliOptions {
@@ -14,6 +15,7 @@ export interface BenchmarkCliOptions {
   planners: BenchmarkPlanner[];
   adaptiveDebugReplay: boolean;
   adaptivePostEscalationStepBudget: number | null;
+  adaptivePolicyVersion: AdaptivePolicyVersion;
 }
 
 interface RawCliOptions {
@@ -26,6 +28,7 @@ interface RawCliOptions {
   compare?: BenchmarkPlanner[];
   adaptiveDebugReplay?: boolean;
   postEscalationSteps?: number;
+  adaptivePolicy: AdaptivePolicyVersion;
 }
 
 export function parseBenchmarkCliOptions(
@@ -72,6 +75,12 @@ export function parseBenchmarkCliOptions(
       "--post-escalation-steps <count>",
       "cap Adaptive debug replay to this many post-escalation actions",
       parsePositiveInteger
+    )
+    .option(
+      "--adaptive-policy <version>",
+      "use Adaptive policy v1 or opportunity-preserving v2",
+      parseAdaptivePolicy,
+      "v2"
     );
 
   program.parse([...argv], { from: "user" });
@@ -102,8 +111,14 @@ export function parseBenchmarkCliOptions(
     adaptiveDebugReplay: options.adaptiveDebugReplay ?? false,
     adaptivePostEscalationStepBudget: options.adaptiveDebugReplay
       ? (options.postEscalationSteps ?? 3)
-      : null
+      : null,
+    adaptivePolicyVersion: options.adaptivePolicy
   };
+}
+
+function parseAdaptivePolicy(value: string): AdaptivePolicyVersion {
+  if (value === "v1" || value === "v2") return value;
+  throw new InvalidArgumentError(`unknown Adaptive policy version: ${value}`);
 }
 
 function parseSuite(value: string): "controlled-v2" | "generalization-v3" {

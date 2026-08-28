@@ -82,6 +82,7 @@ async function main(): Promise<void> {
       plannerStrategies: strategies,
       ollamaClient: ollamaClient ?? undefined,
       ollamaStrategy: strategies.ollama as OllamaBenchmarkPlannerStrategy | undefined,
+      adaptivePolicyVersion: options.adaptivePolicyVersion,
       onRunStart: (scenario, repetition, planner) => {
         completedRuns += 1;
         console.log(
@@ -91,7 +92,7 @@ async function main(): Promise<void> {
     });
     const result = await new BenchmarkRunner(executor, {
       gitCommitSha: readGitCommitSha(),
-      plannerModels: plannerModels(options.planners),
+      plannerModels: plannerModels(options.planners, options.adaptivePolicyVersion),
       benchmarkApplication: {
         name: "benchmark-saas-workspace",
         version: "0.0.0",
@@ -185,6 +186,9 @@ async function runGeneralizationBenchmark(input: {
       `Adaptive diagnostic replay: ${input.options.adaptivePostEscalationStepBudget} post-escalation action(s)\n`
     );
   }
+  if (input.options.planners.includes("adaptive")) {
+    console.log(`Adaptive policy: ${input.options.adaptivePolicyVersion}\n`);
+  }
 
   const executor = new GeneralizationPlaywrightExecutor({
     benchmark: input.benchmark,
@@ -196,6 +200,7 @@ async function runGeneralizationBenchmark(input: {
     adaptiveDebugReplay: input.options.adaptiveDebugReplay,
     adaptivePostEscalationStepBudget:
       input.options.adaptivePostEscalationStepBudget ?? undefined,
+    adaptivePolicyVersion: input.options.adaptivePolicyVersion,
     onRunStart: (scenario, repetition, planner) => {
       completedRuns += 1;
       console.log(
@@ -205,14 +210,18 @@ async function runGeneralizationBenchmark(input: {
   });
   const result = await new GeneralizationRunner(executor, {
     gitCommitSha: readGitCommitSha(),
-    plannerModels: plannerModels(input.options.planners),
+    plannerModels: plannerModels(
+      input.options.planners,
+      input.options.adaptivePolicyVersion
+    ),
     benchmarkApplication: {
       name: "benchmark-saas-workspace",
       version: "0.0.0",
       configuration: "five-seeded-bugs-plus-generalization-states"
     },
     adaptiveDebugReplay: input.options.adaptiveDebugReplay,
-    adaptivePostEscalationStepBudget: input.options.adaptivePostEscalationStepBudget
+    adaptivePostEscalationStepBudget: input.options.adaptivePostEscalationStepBudget,
+    adaptivePolicyVersion: input.options.adaptivePolicyVersion
   }).run(scenarios, {
     runsPerScenario: input.options.runs,
     scenarioIds: input.options.scenario ? [input.options.scenario] : undefined,
@@ -229,13 +238,14 @@ async function runGeneralizationBenchmark(input: {
 }
 
 function plannerModels(
-  planners: readonly BenchmarkPlanner[]
+  planners: readonly BenchmarkPlanner[],
+  adaptivePolicyVersion: "v1" | "v2"
 ): Partial<Record<BenchmarkPlanner, string>> {
   return {
     ...(planners.includes("ollama") ? { ollama: OLLAMA_MODEL } : {}),
     ...(planners.includes("hybrid") ? { hybrid: "rule-based-v2" } : {}),
     ...(planners.includes("adaptive")
-      ? { adaptive: `deterministic-first+${OLLAMA_MODEL}` }
+      ? { adaptive: `adaptive-${adaptivePolicyVersion}+${OLLAMA_MODEL}` }
       : {})
   };
 }

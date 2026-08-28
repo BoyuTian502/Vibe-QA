@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { AdaptivePolicyVersion } from "@vibeqa/adaptive-execution";
 
 import { aggregateGeneralizationMetrics } from "./generalization-metrics.js";
 import type {
@@ -29,6 +30,7 @@ export interface GeneralizationRunnerOptions {
   benchmarkApplication?: BenchmarkApplicationConfiguration;
   adaptiveDebugReplay?: boolean;
   adaptivePostEscalationStepBudget?: number | null;
+  adaptivePolicyVersion?: AdaptivePolicyVersion;
 }
 
 const DEFAULT_APPLICATION: BenchmarkApplicationConfiguration = {
@@ -45,6 +47,7 @@ export class GeneralizationRunner {
   private readonly benchmarkApplication: BenchmarkApplicationConfiguration;
   private readonly adaptiveDebugReplay: boolean;
   private readonly adaptivePostEscalationStepBudget: number | null;
+  private readonly adaptivePolicyVersion: AdaptivePolicyVersion;
 
   constructor(
     private readonly executor: GeneralizationScenarioExecutor,
@@ -60,6 +63,7 @@ export class GeneralizationRunner {
     this.adaptiveDebugReplay = options.adaptiveDebugReplay ?? false;
     this.adaptivePostEscalationStepBudget =
       options.adaptivePostEscalationStepBudget ?? null;
+    this.adaptivePolicyVersion = options.adaptivePolicyVersion ?? "v2";
   }
 
   async run(
@@ -129,7 +133,8 @@ export class GeneralizationRunner {
       benchmarkApplication: { ...this.benchmarkApplication },
       randomSeed: null,
       adaptiveDebugReplay: this.adaptiveDebugReplay,
-      adaptivePostEscalationStepBudget: this.adaptivePostEscalationStepBudget
+      adaptivePostEscalationStepBudget: this.adaptivePostEscalationStepBudget,
+      adaptivePolicyVersion: this.adaptivePolicyVersion
     };
 
     return {

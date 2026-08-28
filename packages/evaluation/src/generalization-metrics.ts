@@ -83,7 +83,11 @@ export function aggregateGeneralizationMetrics(
         planner: run.planner,
         scenarioId: run.scenarioId,
         successful: isSuccessfulRun(run),
-        adaptive: run.adaptive
+        adaptive: run.adaptive,
+        hiddenBugDiscovered:
+          run.expectedBugIds.length === 0
+            ? null
+            : run.expectedBugIds.every((bugId) => run.detectedBugIds.includes(bugId))
       }))
     ),
     adaptiveFailureAnalysis: aggregateAdaptiveFailureAnalysis(runs)

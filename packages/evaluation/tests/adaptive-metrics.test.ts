@@ -17,6 +17,7 @@ describe("adaptive execution metrics", () => {
         planner: "adaptive",
         scenarioId: "hard",
         successful: true,
+        hiddenBugDiscovered: true,
         adaptive: metadata({
           escalationRequired: true,
           escalationOccurred: true,
@@ -24,7 +25,20 @@ describe("adaptive execution metrics", () => {
           ollamaAvailable: true,
           deterministicSteps: 3,
           ollamaSteps: 2,
-          ollamaInvocationCount: 2
+          ollamaInvocationCount: 2,
+          escalationTiming: "early",
+          opportunityPreservingEscalation: true,
+          opportunityRetainedAtHandoff: 1,
+          safeCandidatesRemainingAtHandoff: 6,
+          remainingStepBudgetAtHandoff: 5,
+          initialPageFingerprint: "initial",
+          handoffSnapshot: { pageFingerprint: "initial" } as never,
+          completionGateRejectionCount: 1,
+          nullRecoveryCount: 1,
+          plannerDecisions: [
+            plannerDecision("null_action"),
+            plannerDecision("valid_action")
+          ]
         })
       },
       {
@@ -38,7 +52,17 @@ describe("adaptive execution metrics", () => {
           ollamaAvailable: true,
           deterministicSteps: 4,
           ollamaSteps: 1,
-          ollamaInvocationCount: 1
+          ollamaInvocationCount: 1,
+          escalationTiming: "stagnation",
+          opportunityPreservingEscalation: false,
+          opportunityRetainedAtHandoff: 0.5,
+          safeCandidatesRemainingAtHandoff: 2,
+          remainingStepBudgetAtHandoff: 2,
+          initialPageFingerprint: "initial",
+          handoffSnapshot: { pageFingerprint: "late" } as never,
+          completionGateRejectionCount: 1,
+          nullRecoveryCount: 0,
+          plannerDecisions: [plannerDecision("null_action")]
         })
       }
     ]);
@@ -50,6 +74,18 @@ describe("adaptive execution metrics", () => {
       successfulEscalationRate: 0.5,
       avoidedLlmRate: 1 / 3,
       ollamaInvocationCount: 3,
+      earlyEscalationCount: 1,
+      stagnationEscalationCount: 1,
+      opportunityPreservingEscalationCount: 1,
+      plannerNullDecisionCount: 2,
+      postHandoffPlannerDecisionCount: 3,
+      plannerNullRateAfterHandoff: 2 / 3,
+      nullRecoveryCount: 1,
+      nullRecoveryRate: 0.5,
+      completionGateRejectionCount: 2,
+      hiddenDiscoveryAfterEarlyHandoffCount: 1,
+      hiddenDiscoveryAfterEarlyHandoffRate: 1,
+      handoffStateSimilarityToInitialStateRate: 0.5,
       utilityCounts: {
         USEFUL_ESCALATION: 1,
         UNNECESSARY_ESCALATION: 0,
@@ -57,6 +93,9 @@ describe("adaptive execution metrics", () => {
         NO_ESCALATION_NEEDED: 1
       }
     });
+    expect(result?.opportunityRetainedAtHandoff.mean).toBe(0.75);
+    expect(result?.safeCandidatesRemainingAtHandoff.mean).toBe(4);
+    expect(result?.postHandoffActionUtilization.mean).toBeCloseTo(0.45);
     expect(result?.thresholdAnalysis.map((item) => item.profile)).toEqual([
       "conservative",
       "balanced",
@@ -91,5 +130,22 @@ function metadata(
     progressEvents: [],
     escalationFailure: null,
     ...overrides
+  };
+}
+
+function plannerDecision(
+  outcome: "valid_action" | "null_action"
+): NonNullable<AdaptiveExecutionMetadata["plannerDecisions"]>[number] {
+  return {
+    phase: "ollama",
+    invocation: 1,
+    outcome,
+    action: null,
+    promptCharacterCount: 100,
+    responseCharacterCount: 4,
+    actionHistoryCount: 0,
+    pageFingerprint: "state",
+    durationMs: 10,
+    error: null
   };
 }

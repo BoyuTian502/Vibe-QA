@@ -396,6 +396,51 @@ judged from measured controlled and generalization comparisons; escalation can
 still be late, unnecessary, or unable to recover within the remaining step
 budget.
 
+### Adaptive V2 Opportunity Preservation
+
+Adaptive V2 is the default Adaptive policy. It keeps V1's deterministic
+progress monitoring as a fallback, but can hand control to Ollama before a
+proposed deterministic action is executed. A deterministic, runtime-only
+opportunity evaluator considers the public goal, visible enabled controls,
+unexplored safe candidates, distinct navigation destinations, control
+diversity, page regions, action history, and the proposed action. It never
+receives scenario IDs, evaluator recommendations, hidden selectors, or bug
+metadata.
+
+Policy precedence is explicit:
+
+1. Known scripted workflows remain deterministic.
+2. Discovery or semantic goals on a high-branching state hand off before a
+   narrowing action.
+3. Existing recovery and semantic uncertainty signals remain eligible for
+   escalation.
+4. Repeated true stagnation remains the fallback.
+5. Otherwise deterministic execution continues.
+
+Ollama receives a compact continuation containing the sanitized public goal,
+current visible state, up to five meaningful prior actions, remaining safe
+candidates, progress summary, and handoff reason. Typed values, credentials,
+bug IDs, hidden controls, and evaluator-only classifications are excluded.
+
+A planner `null` is no longer treated as semantic completion by itself. When a
+deterministic completion check cannot confirm the public goal and safe
+unexplored candidates remain, V2 requests one bounded replan. The run still
+terminates deterministically on confirmed completion, candidate exhaustion,
+remaining-budget exhaustion, generation failure, or retry-limit exhaustion.
+
+Use the policy switch for controlled A/B diagnostics:
+
+```bash
+npm run benchmark:qa -- --suite generalization --planner adaptive --adaptive-policy v1 --runs 3
+npm run benchmark:qa -- --suite generalization --planner adaptive --adaptive-policy v2 --runs 3
+npm run benchmark:qa -- --suite generalization --compare deterministic,ollama,hybrid,adaptive --adaptive-policy v2 --runs 10
+```
+
+V5 reporting remains available and now includes V2 early/stagnation escalation,
+opportunity retained at handoff, safe candidates, planner-null and null-recovery
+rates, completion-gate rejections, post-handoff utilization, hidden discovery
+by handoff timing, and handoff-state similarity.
+
 ### Adaptive Failure Diagnostics
 
 Generalization reports include an evaluator-only **Adaptive Escalation Failure
