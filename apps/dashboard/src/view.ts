@@ -32,6 +32,17 @@ export const AUTHENTICATION_FORM_SCRIPT = `
   };
   toggle?.addEventListener("change", syncAuthentication);
   syncAuthentication();
+  const expected = document.querySelector('#expectedBehavior');
+  const hint = document.querySelector('#expected-text-hint');
+  const syncMode = () => {
+    const exploratory = document.querySelector('input[name="mode"]:checked')?.value === "exploratory";
+    if (expected instanceof HTMLTextAreaElement) expected.required = !exploratory;
+    if (hint) hint.textContent = exploratory
+      ? "Optional. The agent explores autonomously from your target page and objective. Text entered here is an additional final-page check."
+      : "Enter visible page text to verify after the workflow. Each non-empty line must appear on the final page.";
+  };
+  document.querySelectorAll('input[name="mode"]').forEach(input => input.addEventListener("change", syncMode));
+  syncMode();
 })();
 `;
 
@@ -58,17 +69,17 @@ export function renderTestCreationPage(
   runs: DashboardRun[],
   availableModes: readonly QATestMode[],
   error: string | null = null,
-  values: CreateTestRequestInput = {
+  values: CreateTestRequestInput | null = null
+): string {
+  const selectedMode =
+    values && availableModes.includes(values.mode) ? values.mode : null;
+  values ??= {
     websiteUrl: "",
     objective: "",
     expectedBehavior: "",
     mode: "functional",
     credentials: null
-  }
-): string {
-  const selectedMode = availableModes.includes(values.mode)
-    ? values.mode
-    : (availableModes[0] ?? values.mode);
+  };
   const workflowAvailable = availableModes.length > 0;
   const availabilityLabel =
     availableModes.length === 3
@@ -141,9 +152,11 @@ export function renderTestCreationPage(
                 maxlength="1500"
                 rows="4"
                 placeholder="Dashboard"
-                required
+                aria-describedby="expected-text-hint"
+                ${selectedMode === "exploratory" ? "" : "required"}
               >${escapeHtml(values.expectedBehavior)}</textarea>
             </label>
+            <p id="expected-text-hint" class="header-summary">${selectedMode === "exploratory" ? "Optional. The agent explores autonomously from your target page and objective. Text entered here is an additional final-page check." : "Enter visible page text to verify after the workflow. Each non-empty line must appear on the final page."}</p>
             <section class="auth-configuration" aria-labelledby="authentication-heading">
               <div class="auth-heading">
                 <div>
@@ -304,11 +317,12 @@ function renderReport(
           <section id="steps" class="panel steps-panel">
             <div class="section-heading">
               <div>
-                <p class="section-label">Functional journey</p>
+                <p class="section-label">${run.execution?.mode === "exploratory" ? "Exploratory journey" : "Test journey"}</p>
                 <h2>Test steps</h2>
               </div>
               <span class="count-label">${run.stepCount} total</span>
             </div>
+            ${run.execution ? `<p class="header-summary execution-summary">${escapeHtml(run.execution.mode)} / ${run.execution.strategy === "adaptive-v2" ? "Autonomous exploration" : "Planned workflow"}. ${run.execution.modelInvocationCount} model calls, ${run.execution.pageCount} pages, ${run.execution.stateCount} states. Stopped: ${escapeHtml(run.execution.terminationReason.replaceAll("-", " "))}.</p>` : ""}
             ${renderSteps(run.steps)}
           </section>
 
@@ -574,7 +588,7 @@ function renderRequestFact(label: string, value: string): string {
 
 function renderModeOption(
   mode: QATestMode,
-  selectedMode: QATestMode,
+  selectedMode: QATestMode | null,
   availableModes: readonly QATestMode[]
 ): string {
   const available = availableModes.includes(mode);
@@ -583,6 +597,7 @@ function renderModeOption(
       <input
         type="radio"
         name="mode"
+        required
         value="${mode}"
         ${mode === selectedMode ? "checked" : ""}
         ${available ? "" : "disabled"}
@@ -1234,6 +1249,7 @@ function styles(): string {
     .mode-fieldset { border: 0; margin: 0; min-width: 0; padding: 0; }
     .mode-fieldset legend { color: #53636f; font-size: 0.76rem; font-weight: 800; margin-bottom: 8px; }
     .mode-control { border: 1px solid #bcc7ce; border-radius: 6px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; }
+    .execution-summary { padding: 0 20px 14px; }
     .mode-option { cursor: pointer; min-width: 0; position: relative; }
     .mode-option + .mode-option { border-left: 1px solid #bcc7ce; }
     .mode-option input { height: 1px; opacity: 0; position: absolute; width: 1px; }

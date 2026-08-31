@@ -57,6 +57,14 @@ export interface DashboardScreenshot {
 }
 
 export interface DashboardRun extends DashboardRunSummary {
+  execution?: {
+    mode: string;
+    strategy: string;
+    modelInvocationCount: number;
+    terminationReason: string;
+    pageCount: number;
+    stateCount: number;
+  };
   steps: DashboardStep[];
   timeline: DashboardTimelineEvent[];
   primaryIssue: DashboardIssue | null;

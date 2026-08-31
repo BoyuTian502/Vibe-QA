@@ -96,13 +96,7 @@ async function handleRequest(
 
     if (request.method === "POST" && requestUrl.pathname === "/tests") {
       const runs = await store.listRuns();
-      let form: CreateTestRequestInput = {
-        websiteUrl: "",
-        objective: "",
-        expectedBehavior: "",
-        mode: "functional" as const,
-        credentials: null
-      };
+      let form: CreateTestRequestInput | null = null;
       try {
         form = await readTestRequestForm(request);
         const testRequest = testWorkflow.submit(form);
@@ -370,6 +364,9 @@ async function readTestRequestForm(request: IncomingMessage): Promise<{
     chunks.push(buffer);
   }
   const form = new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
+  if (form.getAll("mode").length !== 1) {
+    throw new TestRequestValidationError("Select exactly one testing mode.");
+  }
   const mode = form.get("mode") ?? "";
   const loginRequired = form.get("loginRequired") === "on";
   const username = form.get("loginUsername") ?? "";

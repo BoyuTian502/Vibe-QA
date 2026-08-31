@@ -5,6 +5,7 @@ import type { TestResult } from "@vibeqa/test-engine";
 import { describe, expect, it, vi } from "vitest";
 
 import { alphaExecutionPolicy } from "../src/alpha-policy.js";
+import type { ProductTestResult } from "../src/product-execution.js";
 import { TemporaryLoginCredentials } from "../src/secure-credentials.js";
 
 import {
@@ -48,6 +49,11 @@ describe("UserTestWorkflow", () => {
         )
       ).resolves.toMatchObject({ status: "passed" });
       expect(generate).not.toHaveBeenCalled();
+      expect(artifacts.saved?.execution).toMatchObject({
+        requestedMode: mode,
+        strategy: "deterministic",
+        modelInvocationCount: 0
+      });
       expect(artifacts.saved?.executedSteps.map((step) => step.action)).toEqual([
         { type: "getText", selector: "body" }
       ]);
@@ -124,6 +130,13 @@ describe("UserTestWorkflow", () => {
       status: "failed"
     });
     expect(generate).toHaveBeenCalledTimes(2);
+    expect(artifacts.saved?.execution).toMatchObject({
+      requestedMode: "exploratory",
+      strategy: "adaptive-v2",
+      modelInvocationCount: 2,
+      terminationReason: "null-retry-exhausted"
+    });
+    expect(artifacts.saved?.trace.execution).toEqual(artifacts.saved?.execution);
     const prompt = generate.mock.calls[0]?.[0] as string;
     expect(prompt).toContain("Adaptive execution context:");
     expect(prompt).toContain("Handoff mode: early");
@@ -309,7 +322,7 @@ describe("UserTestWorkflow", () => {
     });
 
     const execution = await executor.execute(
-      testInput("exploratory"),
+      { ...testInput("exploratory"), expectedBehavior: "" },
       "request-explore-001"
     );
 
@@ -431,10 +444,266 @@ describe("UserTestWorkflow", () => {
       })
     ).toThrow(/valid testing mode/);
   });
+
+  it.each(["functional", "regression", "exploratory"] as const)(
+    "preserves %s through request validation and execution selection",
+    async (mode) => {
+      const execute = vi
+        .fn()
+        .mockResolvedValue({ runId: "preserved", status: "passed" });
+      const workflow = new UserTestWorkflow({ execute });
+      const input = {
+        ...testInput(mode),
+        expectedBehavior: mode === "exploratory" ? "" : "Sign in"
+      };
+      const request = workflow.submit(input);
+      await workflow.waitForCompletion(request.id);
+      expect(execute).toHaveBeenCalledWith(
+        expect.objectContaining({ mode, expectedBehavior: input.expectedBehavior }),
+        request.id
+      );
+      if (mode !== "exploratory")
+        expect(() =>
+          validateCreateTestRequest({ ...input, expectedBehavior: "" })
+        ).toThrow(/visible page text is required/);
+    }
+  );
+
+  it.each(["", "Sign\t in\nSign in", "Missing text"])(
+    "keeps optional text %j separate from autonomous actions",
+    async (expectedBehavior) => {
+      const browser = new FakeBrowserController(explorationLinks());
+      const artifacts = new MemoryArtifactStore();
+      const plan = vi
+        .fn()
+        .mockRejectedValue(new Error("Functional builder must not run"));
+      const generate = vi
+        .fn()
+        .mockResolvedValueOnce(
+          JSON.stringify({ type: "navigate", url: "http://example.test/explored" })
+        )
+        .mockResolvedValue("null");
+      const executor = new AgentTestRequestExecutor({
+        outputRoot: "unused",
+        planner: { plan },
+        explorationClient: { generate },
+        launchBrowser: async () => browser,
+        artifactStore: artifacts
+      });
+      await executor.execute(
+        {
+          ...testInput("exploratory"),
+          objective: "Explore all pages",
+          expectedBehavior
+        },
+        "optional-text"
+      );
+      expect(plan).not.toHaveBeenCalled();
+      expect(browser.navigatedUrls).toEqual([
+        "http://example.test/login",
+        "http://example.test/explored"
+      ]);
+      expect(artifacts.saved?.executedSteps[0]?.action).toEqual({
+        type: "navigate",
+        url: "http://example.test/explored"
+      });
+      expect(artifacts.saved?.execution?.actionCount).toBe(1);
+      expect(artifacts.saved?.execution?.pagesVisited).toContain(
+        "http://example.test/explored"
+      );
+      expect(
+        artifacts.saved?.trace.steps.some(
+          (step) => step.action?.type === "navigate" && step.safetyDecision === "allow"
+        )
+      ).toBe(true);
+      expect(
+        artifacts.saved?.executedSteps.some(
+          (step) => step.name === "Verify optional final page text"
+        )
+      ).toBe(Boolean(expectedBehavior));
+      expect(
+        artifacts.saved?.bugReports.some((bug) => bug.category === "content")
+      ).toBe(expectedBehavior === "Missing text");
+    }
+  );
+
+  it.each(["require_approval", "block"] as const)(
+    "keeps safety %s active after model handoff",
+    async (decision) => {
+      const selector = decision === "block" ? "#delete-account" : "#purchase";
+      const browser = new FakeBrowserController([
+        ...explorationLinks(),
+        {
+          id: "risky",
+          selector,
+          tagName: "button",
+          role: "button",
+          text: decision === "block" ? "Delete account permanently" : "Purchase",
+          accessibleName: null,
+          visible: true,
+          enabled: true,
+          editable: false
+        }
+      ]);
+      const click = vi.spyOn(browser, "click");
+      const artifacts = new MemoryArtifactStore();
+      const executor = new AgentTestRequestExecutor({
+        outputRoot: "unused",
+        launchBrowser: async () => browser,
+        artifactStore: artifacts,
+        explorationClient: {
+          generate: async () => JSON.stringify({ type: "click", selector })
+        }
+      });
+      await executor.execute(
+        {
+          ...testInput("exploratory"),
+          objective: "Explore all pages",
+          expectedBehavior: ""
+        },
+        "safety"
+      );
+      expect(click).not.toHaveBeenCalled();
+      expect(
+        artifacts.saved?.trace.steps.some((step) => step.safetyDecision === decision)
+      ).toBe(true);
+      expect(artifacts.saved?.status).toBe("failed");
+    }
+  );
+
+  it("waits for an initial loading screen before asking Adaptive to plan", async () => {
+    const browser = new FakeBrowserController(explorationLinks());
+    const observe = browser.observe.bind(browser);
+    vi.spyOn(browser, "observe").mockImplementationOnce(async () => ({
+      ...(await observe()),
+      textSample: "Loading...",
+      elements: []
+    }));
+    const wait = vi.spyOn(browser, "wait");
+    const generate = vi.fn().mockResolvedValue("null");
+    const artifacts = new MemoryArtifactStore();
+    await new AgentTestRequestExecutor({
+      outputRoot: "unused",
+      launchBrowser: async () => browser,
+      artifactStore: artifacts,
+      explorationClient: { generate }
+    }).execute(
+      {
+        ...testInput("exploratory"),
+        objective: "Explore all pages",
+        expectedBehavior: ""
+      },
+      "readiness"
+    );
+    expect(wait).toHaveBeenCalledWith(500);
+    expect(generate).toHaveBeenCalled();
+    expect(generate.mock.calls[0]?.[0]).not.toContain("Loading...");
+    expect(artifacts.saved?.trace.steps[0]?.observation?.textSample).toBe("Sign in");
+  });
+
+  it("normalizes fenced actions and null before Adaptive applies its bounded continuation policy", async () => {
+    const browser = new FakeBrowserController(explorationLinks());
+    const artifacts = new MemoryArtifactStore();
+    const generate = vi
+      .fn()
+      .mockResolvedValueOnce(
+        '```json\n{"type":"navigate","url":"http://example.test/explored"}\n```'
+      )
+      .mockResolvedValue("```json\nnull\n```");
+    await new AgentTestRequestExecutor({
+      outputRoot: "unused",
+      launchBrowser: async () => browser,
+      artifactStore: artifacts,
+      explorationClient: { generate }
+    }).execute(
+      {
+        ...testInput("exploratory"),
+        objective: "Explore all pages",
+        expectedBehavior: ""
+      },
+      "fenced-json"
+    );
+    expect(generate).toHaveBeenCalledTimes(3);
+    expect(artifacts.saved?.execution).toMatchObject({
+      modelInvocationCount: 3,
+      actionCount: 1,
+      terminationReason: "null-retry-exhausted"
+    });
+    expect(artifacts.saved?.execution?.plannerDecisions).toContainEqual({
+      phase: "ollama",
+      outcome: "valid_action",
+      actionType: "navigate"
+    });
+    expect(
+      artifacts.saved?.execution?.plannerDecisions?.filter(
+        (decision) => decision.outcome === "null_action"
+      )
+    ).toHaveLength(2);
+    expect(artifacts.saved?.errors.join(" ")).not.toContain("expected object");
+    expect(browser.navigatedUrls).toContain("http://example.test/explored");
+  });
+
+  it("rejects malformed model actions without claiming model connectivity failed", async () => {
+    const browser = new FakeBrowserController(explorationLinks());
+    const artifacts = new MemoryArtifactStore();
+    await new AgentTestRequestExecutor({
+      outputRoot: "unused",
+      launchBrowser: async () => browser,
+      artifactStore: artifacts,
+      explorationClient: { generate: async () => '{"type":"unsupported"}' }
+    }).execute(
+      {
+        ...testInput("exploratory"),
+        objective: "Explore all pages",
+        expectedBehavior: ""
+      },
+      "malformed"
+    );
+    expect(artifacts.saved?.execution?.actionCount).toBe(0);
+    expect(artifacts.saved?.errors.join(" ")).toContain("invalid BrowserAction JSON");
+    expect(artifacts.saved?.errors.join(" ")).not.toContain("unavailable");
+  });
+
+  it("bounds loading waits instead of reporting an empty exploration as a pass", async () => {
+    const browser = new FakeBrowserController();
+    const observe = browser.observe.bind(browser);
+    vi.spyOn(browser, "observe").mockImplementation(async () => ({
+      ...(await observe()),
+      textSample: "Loading..."
+    }));
+    const generate = vi.fn();
+    const artifacts = new MemoryArtifactStore();
+    await new AgentTestRequestExecutor({
+      outputRoot: "unused",
+      launchBrowser: async () => browser,
+      artifactStore: artifacts,
+      explorationClient: { generate }
+    }).execute({ ...testInput("exploratory"), expectedBehavior: "" }, "loading");
+    expect(browser.observe).toHaveBeenCalledTimes(11);
+    expect(generate).not.toHaveBeenCalled();
+    expect(artifacts.saved?.status).toBe("failed");
+    expect(artifacts.saved?.errors.join(" ")).toContain("readiness wait");
+    expect(browser.closed).toBe(true);
+  });
 });
 
+function explorationLinks(): ElementInformation[] {
+  return Array.from({ length: 4 }, (_, index) => ({
+    id: `page-${index}`,
+    tagName: "a",
+    role: "link",
+    accessibleName: `Page ${index}`,
+    text: `Page ${index}`,
+    visible: true,
+    enabled: true,
+    editable: false,
+    selector: `#page-${index}`,
+    href: `http://example.test/page-${index}`
+  }));
+}
+
 class MemoryArtifactStore implements TestArtifactStore {
-  saved: TestResult | null = null;
+  saved: ProductTestResult | null = null;
   savedConfiguration: StoredTestConfiguration | null = null;
 
   screenshotDirectory(runId: string): string {
@@ -474,7 +743,7 @@ class FakeBrowserController implements BrowserController {
     return {
       id: `observation-${this.observationIndex}`,
       timestamp: new Date(
-        `2026-08-25T08:30:0${this.observationIndex}.000Z`
+        Date.UTC(2026, 7, 25, 8, 30, this.observationIndex)
       ).toISOString(),
       url: this.currentUrl,
       title: "Example Login",

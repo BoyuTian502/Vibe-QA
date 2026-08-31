@@ -16,7 +16,11 @@ import {
 import { OllamaClient, type LLMClient } from "@vibeqa/llm";
 import type { TestPlanner } from "@vibeqa/planner";
 import { DefaultActionSafetyPolicy } from "@vibeqa/safety-policy";
-import type { BrowserAction, Observation } from "@vibeqa/schemas";
+import {
+  BrowserActionSchema,
+  type BrowserAction,
+  type Observation
+} from "@vibeqa/schemas";
 import {
   TestTask,
   TestEvaluator,
@@ -29,6 +33,7 @@ import {
 } from "@vibeqa/test-engine";
 
 import { alphaExecutionPolicy, type QATestMode } from "./alpha-policy.js";
+import type { ProductTestResult } from "./product-execution.js";
 import { createFunctionalFormSteps, parseFunctionalForm } from "./functional-form.js";
 import {
   assertFunctionalPlan,
@@ -254,8 +259,12 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
     requestId: string
   ): Promise<UserTestExecution> {
     let browser: ClosableBrowserController | null = null;
+    const startedAt = this.now();
 
     try {
+      if (!ALL_TEST_MODES.includes(input.mode)) {
+        throw new TestRequestValidationError("Select a valid testing mode.");
+      }
       const policy = alphaExecutionPolicy(input.mode);
       const testCase =
         policy.strategy === "deterministic" && this.planner
@@ -266,28 +275,53 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
       const executionBrowser = input.credentials
         ? new SecureAuthenticatedBrowserController(browser, input.credentials)
         : browser;
-      const functionalCase =
-        policy.strategy === "deterministic"
-          ? (testCase ?? (await createLocalTestCase(input, executionBrowser)))
-          : null;
-      if (input.mode === "functional" && functionalCase) {
-        assertFunctionalPlan(input.objective, functionalCase);
+      let executionResult: ProductTestResult;
+      switch (input.mode) {
+        case "exploratory":
+          executionResult = await this.runExploration(
+            executionBrowser,
+            input,
+            this.artifactStore.screenshotDirectory(runId)
+          );
+          break;
+        case "functional":
+        case "regression": {
+          const functionalCase =
+            testCase ?? (await createLocalTestCase(input, executionBrowser));
+          if (input.mode === "functional")
+            assertFunctionalPlan(input.objective, functionalCase);
+          executionResult = await new TestTask({
+            browser: executionBrowser,
+            testCase: functionalCase,
+            onApproval: this.onApproval,
+            screenshotDirectory: this.artifactStore.screenshotDirectory(runId)
+          }).run();
+          break;
+        }
       }
-      const result = sanitizeTestResult(
-        !functionalCase
-          ? await this.runExploration(
-              executionBrowser,
-              input,
-              this.artifactStore.screenshotDirectory(runId)
-            )
-          : await new TestTask({
-              browser: executionBrowser,
-              testCase: functionalCase,
-              onApproval: this.onApproval,
-              screenshotDirectory: this.artifactStore.screenshotDirectory(runId)
-            }).run(),
-        input.credentials
+      const completedAt = this.now();
+      const observations = executionResult.trace.steps.flatMap((step) =>
+        step.observation ? [step.observation] : []
       );
+      executionResult.execution ??= {
+        requestedMode: input.mode,
+        strategy: this.planner ? "custom" : "deterministic",
+        modelInvocationCount: 0,
+        terminationReason:
+          executionResult.status === "passed" ? "workflow-complete" : "workflow-failed",
+        startedAt: startedAt.toISOString(),
+        completedAt: completedAt.toISOString(),
+        durationMs: completedAt.getTime() - startedAt.getTime(),
+        pagesVisited: unique(observations.map((observation) => observation.url)),
+        stateCount: unique(observations.map(createPageStateFingerprint)).length,
+        actionCount: executionResult.executedSteps.length
+      };
+      executionResult.execution.startedAt = startedAt.toISOString();
+      executionResult.execution.completedAt = completedAt.toISOString();
+      executionResult.execution.durationMs =
+        completedAt.getTime() - startedAt.getTime();
+      executionResult.trace.execution = executionResult.execution;
+      const result = sanitizeTestResult(executionResult, input.credentials);
       if (input.mode === "functional") {
         checkFunctionalNavigationResult(input.objective, result);
       }
@@ -324,9 +358,9 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
     browser: BrowserController,
     input: CreateTestRequestInput,
     screenshotDirectory: string
-  ): Promise<TestResult> {
+  ): Promise<ProductTestResult> {
     const targetOrigin = new URL(input.websiteUrl).origin;
-    const goal = `${input.objective}\nExpected behavior: ${input.expectedBehavior}`;
+    const goal = input.objective;
     const state = createExplorationState(input.websiteUrl, goal);
     const baselineSafety = new DefaultActionSafetyPolicy();
     const evidenceBrowser = new EvidenceBrowserController(browser, screenshotDirectory);
@@ -388,8 +422,9 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
       },
       ollamaClient: {
         generate: async (prompt) => {
+          let response: string;
           try {
-            return await localClient.generate(
+            response = await localClient.generate(
               [
                 "Return only one BrowserAction JSON object or null, with no explanation.",
                 "Use canonical fields: navigate {url}, click {selector}, type {selector,value}, wait {ms}, screenshot {}, getText {selector}, getCurrentUrl {}, assert {selector,containsText}. Include the action type in the type field.",
@@ -401,6 +436,21 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
               localClient instanceof OllamaClient ? ` at ${localClient.baseUrl}` : "";
             throw new Error(
               `Local exploration model unavailable${endpoint}: ${errorMessage(error, input.credentials)}`
+            );
+          }
+          // Both the frozen controller and Agent receive the same canonical JSON.
+          // In particular, a fenced null must reach Adaptive's bounded null policy.
+          try {
+            const trimmed = response.trim();
+            const json =
+              /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed)?.[1] ?? trimmed;
+            const action: unknown = JSON.parse(json);
+            return action === null
+              ? "null"
+              : JSON.stringify(BrowserActionSchema.parse(action));
+          } catch {
+            throw new Error(
+              "Local exploration model returned invalid BrowserAction JSON."
             );
           }
         }
@@ -447,7 +497,82 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
             "Exploration stopped without confirming the objective; useful actions remain."
           ]
         : [];
-    return explorationToTestResult(agent, input.objective, lifecycleErrors);
+    const result: ProductTestResult = explorationToTestResult(
+      agent,
+      input.objective,
+      lifecycleErrors
+    );
+    // An optional assertion evaluates the final page; it never supplies the plan.
+    if (
+      input.expectedBehavior.trim() &&
+      agent.state.currentObservation &&
+      !agent.getPendingApproval()
+    ) {
+      const assertionAgent = new Agent({
+        browser: evidenceBrowser,
+        llmClient: {
+          generate: async () => JSON.stringify({ type: "getText", selector: "body" })
+        },
+        maxSteps: 1,
+        safetyPolicy: baselineSafety
+      });
+      await assertionAgent.run("Verify optional final page text");
+      const assertion = explorationToTestResult(
+        assertionAgent,
+        input.objective,
+        [],
+        input.expectedBehavior,
+        evidenceBrowser.lastPageText
+      );
+      const stepOffset = result.executedSteps.length;
+      result.executedSteps.push(
+        ...assertion.executedSteps.map((step) => ({
+          ...step,
+          index: step.index + stepOffset
+        }))
+      );
+      result.trace.steps.push(...assertion.trace.steps);
+      result.screenshots = unique([...result.screenshots, ...assertion.screenshots]);
+      result.errors = unique([...result.errors, ...assertion.errors]);
+      result.bugReports.push(
+        ...assertion.bugReports.map((bug) => ({
+          ...bug,
+          stepIndex: bug.stepIndex + stepOffset
+        }))
+      );
+      if (assertion.status === "failed") result.status = "failed";
+    }
+    const observations = result.trace.steps.flatMap((step) =>
+      step.observation ? [step.observation] : []
+    );
+    result.execution = {
+      requestedMode: "exploratory",
+      strategy: "adaptive-v2",
+      modelInvocationCount: metadata.ollamaInvocationCount,
+      terminationReason: agent.getPendingApproval()
+        ? "approval-required"
+        : agent.state.errors.length
+          ? "agent-error"
+          : agent.state.stepCount >= 12
+            ? "max-steps"
+            : metadata.postHandoffTerminationReason &&
+                metadata.postHandoffTerminationReason !== "none"
+              ? metadata.postHandoffTerminationReason
+              : "planner-stopped",
+      startedAt: "",
+      completedAt: "",
+      durationMs: 0,
+      pagesVisited: unique(observations.map((observation) => observation.url)),
+      stateCount: unique(observations.map(createPageStateFingerprint)).length,
+      actionCount: agent.state.actionHistory.length,
+      escalationReason: metadata.escalationReason,
+      plannerDecisions: metadata.plannerDecisions.map((decision) => ({
+        phase: decision.phase,
+        outcome: decision.outcome,
+        actionType: decision.action?.type ?? null
+      }))
+    };
+    return result;
   }
 }
 
@@ -536,6 +661,8 @@ function sameOriginCandidates(
 
 class EvidenceBrowserController implements BrowserController {
   private observationIndex = 0;
+  private navigationPending = false;
+  lastPageText: string | undefined;
 
   constructor(
     private readonly browser: BrowserController,
@@ -543,13 +670,29 @@ class EvidenceBrowserController implements BrowserController {
   ) {}
 
   async observe(): Promise<Observation> {
+    if (this.navigationPending) await this.browser.wait(500);
+    this.navigationPending = false;
+    let observation = await this.browser.observe();
+    // Bound the SPA loading wait; do not plan against an empty/loading-only body.
+    for (
+      let attempt = 0;
+      isLoadingObservation(observation) && attempt < 10;
+      attempt += 1
+    ) {
+      await this.browser.wait(500);
+      observation = await this.browser.observe();
+    }
     const path = join(
       this.screenshotDirectory,
       `observation-${String(this.observationIndex).padStart(3, "0")}.png`
     );
     this.observationIndex += 1;
     const screenshotPath = await this.browser.screenshot({ path });
-    const observation = await this.browser.observe();
+    if (isLoadingObservation(observation)) {
+      throw new Error(
+        "The page remained empty or loading after the readiness wait. Exploration did not begin on this page."
+      );
+    }
     return {
       ...observation,
       screenshotPath: typeof screenshotPath === "string" ? screenshotPath : null
@@ -558,14 +701,17 @@ class EvidenceBrowserController implements BrowserController {
 
   async goto(url: string): Promise<void> {
     await this.browser.goto(url);
+    this.navigationPending = true;
   }
 
   async navigate(url: string): Promise<void> {
     await this.browser.navigate(url);
+    this.navigationPending = true;
   }
 
   async click(selector: string): Promise<void> {
     await this.browser.click(selector);
+    this.navigationPending = true;
   }
 
   async type(selector: string, value: string): Promise<void> {
@@ -573,7 +719,9 @@ class EvidenceBrowserController implements BrowserController {
   }
 
   async getText(selector: string): Promise<string> {
-    return await this.browser.getText(selector);
+    const text = await this.browser.getText(selector);
+    if (selector === "body") this.lastPageText = text;
+    return text;
   }
 
   async wait(ms: number): Promise<void> {
@@ -595,6 +743,13 @@ class EvidenceBrowserController implements BrowserController {
   getCurrentUrl(): string {
     return this.browser.getCurrentUrl();
   }
+}
+
+function isLoadingObservation(observation: Observation): boolean {
+  const text = observation.textSample.replace(/\s+/gu, " ").trim();
+  return (
+    !text || /^(?:loading|please wait|loading please wait)[\s.!\u2026]*$/i.test(text)
+  );
 }
 
 export class FileTestArtifactStore implements TestArtifactStore {
@@ -670,8 +825,8 @@ export function validateCreateTestRequest(
       "Do not include passwords, API keys, tokens, or other secrets in the test objective."
     );
   }
-  if (expectedBehavior.length === 0) {
-    throw new TestRequestValidationError("Expected behavior is required.");
+  if (expectedBehavior.length === 0 && input.mode !== "exploratory") {
+    throw new TestRequestValidationError("Expected visible page text is required.");
   }
   if (expectedBehavior.length > MAX_EXPECTED_BEHAVIOR_LENGTH) {
     throw new TestRequestValidationError(
@@ -901,7 +1056,9 @@ async function createLocalNavigationSteps(
 function explorationToTestResult(
   agent: Agent,
   objective: string,
-  lifecycleErrors: string[]
+  lifecycleErrors: string[],
+  expectedText?: string,
+  visiblePageText?: string
 ): TestResult {
   const trace = agent.getTrace();
   const evaluator = new TestEvaluator();
@@ -912,14 +1069,21 @@ function explorationToTestResult(
     const observation =
       trace.steps.slice(traceIndex + 1).find((next) => next.observation)?.observation ??
       null;
-    const testStep = { name: `Explore with ${step.action.type}`, action: step.action };
+    const testStep = {
+      name: expectedText
+        ? "Verify optional final page text"
+        : `Explore with ${step.action.type}`,
+      action: step.action,
+      ...(expectedText ? { expected: { requiredText: expectedText } } : {})
+    };
     const index = executedSteps.length;
     const evaluation = evaluator.evaluate(
       testStep,
       index,
       step,
       step.observation,
-      observation
+      observation,
+      visiblePageText
     );
     bugReports.push(...evaluation.bugReports);
     executedSteps.push({
@@ -978,10 +1142,10 @@ function explorationToTestResult(
   };
 }
 
-function sanitizeTestResult(
-  result: TestResult,
+function sanitizeTestResult<T extends TestResult>(
+  result: T,
   credentials: TemporaryLoginCredentials | null = null
-): TestResult {
+): T {
   const sensitiveValues = result.executedSteps.flatMap((step) =>
     step.action.type === "type" && isSensitiveSelector(step.action.selector)
       ? [step.action.value]

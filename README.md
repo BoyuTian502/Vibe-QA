@@ -156,9 +156,11 @@ compatible endpoint and model.
 
 ### Create A Test
 
-Start the dashboard and open **New Test**. Choose a testing mode, then provide
-the target page, a concise objective such as `Test login functionality`, and the
-expected behavior.
+Start the dashboard and open **New Test**. Explicitly choose a testing mode, then
+provide the target page and a concise objective such as `Test login functionality`.
+No mode is silently selected for a new request. After updating the repository,
+stop any running dashboard and restart `npm run dashboard:qa`; rebuilding files
+does not update modules already loaded by a running Node process.
 
 - **Functional** runs a deterministic local `TestCase` and verifies expected page
   text. No model is called.
@@ -167,6 +169,17 @@ expected behavior.
 - **Exploratory** uses Adaptive V2 with existing Explorer candidates and Agent
   execution. Ollama is called only when Adaptive escalates; unavailable models
   or unresolved completion are reported honestly, not as a silent success.
+
+Exploratory needs only **Target page + Test objective**. **Expected visible page
+text** is optional. When supplied, it adds a deterministic check on the final page
+after exploration, without replacing actions or navigating back to the start.
+The product adapter waits briefly after navigation and polls a loading-only page
+for up to five seconds before planning; a persistent loading screen is a failure,
+not a successful empty exploration. Existing safety approval/block decisions stay
+active. Reports and traces include `execution` evidence: requested mode, actual
+strategy (`adaptive-v2` for Exploratory), model invocation count, decision outcomes,
+visited pages/states, action count, duration, and termination reason. Internal
+planner selection and benchmark diagnostics are not exposed as product controls.
 
 For Functional/Regression, enter literal, case-sensitive text such as `Dashboard`
 in **Expected visible page text**. Leading/trailing whitespace is ignored, and

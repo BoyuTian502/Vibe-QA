@@ -75,6 +75,7 @@ export class ReportStore {
     const rawSteps = asArray(reportRecord.executedSteps).map(asRecord);
     const rawBugs = asArray(reportRecord.bugReports).map(asRecord);
     const traceSteps = asArray(traceRecord.steps).map(asRecord);
+    const execution = asOptionalRecord(reportRecord.execution);
     const steps = rawSteps.map(parseStep);
     const status = parseStatus(reportRecord.status);
     const startedAt = nullableString(traceSteps[0]?.timestamp);
@@ -85,12 +86,26 @@ export class ReportStore {
       null;
 
     return {
+      ...(execution
+        ? {
+            execution: {
+              mode: stringValue(execution.requestedMode),
+              strategy: stringValue(execution.strategy),
+              modelInvocationCount: numberValue(execution.modelInvocationCount, 0),
+              terminationReason: stringValue(execution.terminationReason),
+              pageCount: stringArray(execution.pagesVisited).length,
+              stateCount: numberValue(execution.stateCount, 0)
+            }
+          }
+        : {}),
       id: runId,
       goal: stringValue(reportRecord.goal, "Untitled QA run"),
       status,
       startedAt,
       completedAt,
-      durationMs: durationBetween(startedAt, completedAt),
+      durationMs: execution
+        ? numberValue(execution.durationMs, 0)
+        : durationBetween(startedAt, completedAt),
       stepCount: steps.length,
       passedStepCount: steps.filter((step) => step.status === "passed").length,
       issueCount: rawBugs.length,
