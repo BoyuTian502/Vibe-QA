@@ -2,6 +2,7 @@ import type { AgentTraceStep } from "@vibeqa/agent-core";
 import type { Observation } from "@vibeqa/schemas";
 
 import type { BugReport, TestStep } from "./types.js";
+import { matchesVisiblePageText } from "./visible-text.js";
 
 export interface TestStepEvaluation {
   success: boolean;
@@ -15,7 +16,8 @@ export class TestEvaluator {
     stepIndex: number,
     actionTrace: AgentTraceStep | null,
     previousObservation: Observation | null,
-    newObservation: Observation | null
+    newObservation: Observation | null,
+    visiblePageText?: string
   ): TestStepEvaluation {
     const findings: Array<{
       category: BugReport["category"];
@@ -72,7 +74,10 @@ export class TestEvaluator {
     if (
       step.expected?.requiredText &&
       newObservation &&
-      !newObservation.textSample.includes(step.expected.requiredText)
+      !matchesVisiblePageText(
+        visiblePageText ?? newObservation.textSample,
+        step.expected.requiredText
+      )
     ) {
       findings.push({
         category: "content",

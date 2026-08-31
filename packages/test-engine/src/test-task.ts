@@ -47,7 +47,8 @@ export class TestTask {
 
     const reportingBrowser = new ReportingBrowserController(
       this.browser,
-      join(this.screenshotDirectory, randomUUID())
+      join(this.screenshotDirectory, randomUUID()),
+      this.testCase.steps.some((step) => Boolean(step.expected?.requiredText))
     );
     const agent = new Agent({
       browser: reportingBrowser,
@@ -71,10 +72,13 @@ export class TestTask {
       };
     }
 
-    return this.createResult(agent.getTrace());
+    return this.createResult(agent.getTrace(), reportingBrowser.visiblePageTexts);
   }
 
-  private createResult(trace: AgentTrace): TestResult {
+  private createResult(
+    trace: AgentTrace,
+    visiblePageTexts: ReadonlyMap<string, string>
+  ): TestResult {
     const actionSteps = trace.steps
       .map((step, traceIndex) => ({ step, traceIndex }))
       .filter(
@@ -100,7 +104,8 @@ export class TestTask {
         index,
         actionTrace,
         previousObservation,
-        newObservation
+        newObservation,
+        newObservation ? visiblePageTexts.get(newObservation.id) : undefined
       );
 
       bugReports.push(...evaluation.bugReports);
@@ -154,10 +159,12 @@ class TestStepClient implements LLMClient {
 
 class ReportingBrowserController implements BrowserController {
   private observationIndex = 0;
+  readonly visiblePageTexts = new Map<string, string>();
 
   constructor(
     private readonly browser: BrowserController,
-    private readonly screenshotDirectory: string
+    private readonly screenshotDirectory: string,
+    private readonly captureVisiblePageText: boolean
   ) {}
 
   async observe(): Promise<Observation> {
@@ -168,9 +175,17 @@ class ReportingBrowserController implements BrowserController {
     this.observationIndex += 1;
     const screenshotPath = await this.browser.screenshot({ path });
     const observation = await this.browser.observe();
+    const id = randomUUID();
+
+    // Full text is evaluator-only, not additional planner/trace content. Use a
+    // per-capture ID even when a custom browser reuses its observation IDs.
+    if (this.captureVisiblePageText) {
+      this.visiblePageTexts.set(id, await this.browser.getText("body"));
+    }
 
     return {
       ...observation,
+      id,
       screenshotPath: typeof screenshotPath === "string" ? screenshotPath : null
     };
   }

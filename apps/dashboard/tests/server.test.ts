@@ -186,6 +186,7 @@ describe("dashboard server", () => {
       expect(formHtml).toContain('name="websiteUrl"');
       expect(formHtml).toContain('name="objective"');
       expect(formHtml).toContain('name="expectedBehavior"');
+      expect(formHtml).toContain("Expected visible page text");
       expect(formHtml).toContain('name="mode"');
       expect(formHtml).toContain('name="loginRequired"');
       expect(formHtml).toContain('name="loginUsername"');

@@ -169,7 +169,14 @@ expected behavior.
   or unresolved completion are reported honestly, not as a silent success.
 
 For Functional/Regression, enter literal, case-sensitive text such as `Dashboard`
-in **Expected behavior / page text**. Without temporary login, the local form
+in **Expected visible page text**. Leading/trailing whitespace is ignored, and
+repeated spaces, tabs, and line breaks are collapsed to a single space. For a
+multi-line paste, every non-empty line must appear somewhere in the visible page
+text after normalization; lines need not be adjacent or in the same order, and
+duplicate lines do not require multiple occurrences. Chinese and other Unicode
+text is preserved. Matching is deterministic, not fuzzy or AI-based. Assertions
+use full rendered body text (including content below the fold), not the shortened
+agent observation sample; hidden DOM text is not included. Without temporary login, the local form
 checks the submitted page. With temporary login, it supports a single observed
 username/password/sign-in form and checks the resulting page. It does not infer
 arbitrary multi-page or CRUD workflows from prose; existing structured

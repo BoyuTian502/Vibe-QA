@@ -784,7 +784,7 @@ async function createLocalTestCase(
     );
   }
   steps.push({
-    name: "Verify expected page text",
+    name: "Verify expected visible page text",
     action: { type: "getText", selector: "body" },
     expected: { requiredText: input.expectedBehavior }
   });

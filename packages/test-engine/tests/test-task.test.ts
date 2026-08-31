@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { createServer } from "node:http";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -28,6 +29,71 @@ afterEach(async () => {
 });
 
 describe("TestTask", () => {
+  it("checks full rendered text per step without expanding planner observations", async () => {
+    expect(browser).not.toBeNull();
+    const page = createServer((_request, response) => {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.end(`<html><body><p>${"Intro ".repeat(500)}</p>
+        <div id="footer">Footer <span>first</span> state</div>
+        <p style="display:none">Hidden marker</p>
+        <button id="change" onclick="document.getElementById('footer').textContent='Footer second state'">Next</button>
+        </body></html>`);
+    });
+    await new Promise<void>((resolve) => page.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = page.address();
+      if (!address || typeof address === "string") throw new Error("No fixture port");
+      const startUrl = `http://127.0.0.1:${address.port}`;
+      const result = await new TestTask({
+        browser,
+        testCase: {
+          goal: "Check long page text",
+          startUrl,
+          steps: [
+            {
+              name: "Initial text",
+              action: { type: "getText", selector: "body" },
+              expected: { requiredText: "  Footer\t first state\r\nIntro " }
+            },
+            {
+              name: "Changed text",
+              action: { type: "click", selector: "#change" },
+              expected: { requiredText: "Footer second state" }
+            }
+          ]
+        }
+      }).run();
+      expect(result.status).toBe("passed");
+      expect(result.executedSteps).toHaveLength(2);
+      for (const step of result.trace.steps) {
+        expect(step.observation?.textSample.length ?? 0).toBeLessThanOrEqual(2000);
+        expect(step.thought.prompt ?? "").not.toContain("Footer first state");
+      }
+      for (const requiredText of ["Hidden marker", "Missing marker"]) {
+        const missing = await new TestTask({
+          browser,
+          testCase: {
+            goal: "Reject text that is not visible",
+            startUrl,
+            steps: [
+              {
+                name: "Check text",
+                action: { type: "getText", selector: "body" },
+                expected: { requiredText }
+              }
+            ]
+          }
+        }).run();
+        expect(missing.status).toBe("failed");
+        expect(missing.bugReports.map((bug) => bug.category)).toContain("content");
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        page.close((error) => (error ? reject(error) : resolve()))
+      );
+    }
+  });
+
   it("executes a login workflow and returns a passing structured report", async () => {
     expect(browser).not.toBeNull();
     const testCase = loginTestCase(app.url);

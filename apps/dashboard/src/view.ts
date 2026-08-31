@@ -134,7 +134,7 @@ export function renderTestCreationPage(
               >${escapeHtml(values.objective)}</textarea>
             </label>
             <label class="field-group" for="expectedBehavior">
-              <span>Expected behavior / page text</span>
+              <span>Expected visible page text</span>
               <textarea
                 id="expectedBehavior"
                 name="expectedBehavior"
@@ -238,7 +238,7 @@ export function renderTestRequestPage(
           </section>
 
           <section class="panel expected-behavior-panel">
-            <span>Expected behavior</span>
+            <span>Expected visible page text</span>
             <p>${escapeHtml(request.expectedBehavior)}</p>
           </section>
 

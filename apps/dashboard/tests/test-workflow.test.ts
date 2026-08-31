@@ -39,7 +39,7 @@ describe("UserTestWorkflow", () => {
       });
       await expect(
         executor.execute(
-          { ...testInput(mode), expectedBehavior: "Sign in" },
+          { ...testInput(mode), expectedBehavior: "  Sign\t in\r\nSign in  " },
           "local-default"
         )
       ).resolves.toMatchObject({ status: "passed" });

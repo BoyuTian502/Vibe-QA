@@ -61,8 +61,12 @@ automatic regression selection, and production persistence remain deferred.
 - No paid API is required. Functional/Regression never call a model by default.
 - The local form builds a deterministic page-text check. With temporary login,
   it uses live observed selectors for one username/password/sign-in form, then
-  verifies the expected text. Expected behavior is literal, case-sensitive text
-  in the final observation, not an arbitrary natural-language assertion.
+  verifies **Expected visible page text**. Matching is literal and case-sensitive,
+  with whitespace trimmed/collapsed on both sides. Every non-empty expected line
+  must occur in the full rendered page text, independently of order/adjacency.
+  Duplicate lines require only one occurrence. This is not a natural-language
+  assertion. Full text stays in the TestTask evaluator's temporary snapshot;
+  agent observation samples, prompts, and traces are not expanded.
 - Complex known paths continue to use existing structured TestCase/TestRunner
   APIs. The Alpha form does not synthesize arbitrary CRUD or multi-page workflows.
 - Exploratory uses the existing Adaptive V2 thresholds, bounded null retry and
