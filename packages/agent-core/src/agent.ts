@@ -13,6 +13,12 @@ import {
 import { Evaluator, type EvaluationResult } from "./evaluator.js";
 import { Memory } from "./memory.js";
 import type { AgentTrace, AgentTraceStep } from "./trace.js";
+import {
+  ELEMENT_REPLAN_LIMIT,
+  ELEMENT_RECOVERY_FAILED,
+  validateElementReference,
+  isRecoverableElementError
+} from "./element-recovery.js";
 
 export interface AgentState {
   goal: string;
@@ -37,6 +43,7 @@ export interface BrowserController {
 }
 
 export interface AgentOptions {
+  recoverElementActions?: boolean;
   browser: BrowserController;
   llmClient: LLMClient;
   maxSteps?: number;
@@ -60,6 +67,8 @@ interface PendingApprovalState extends PendingApproval {
 }
 
 export class Agent {
+  private readonly recoverElementActions: boolean;
+  private recoverySteps: AgentTraceStep[] = [];
   private readonly browser: BrowserController;
   private readonly llmClient: LLMClient;
   private readonly maxSteps: number;
@@ -76,6 +85,7 @@ export class Agent {
   state: AgentState = createAgentState("");
 
   constructor(options: AgentOptions) {
+    this.recoverElementActions = options.recoverElementActions ?? false;
     this.browser = options.browser;
     this.llmClient = options.llmClient;
     this.maxSteps = options.maxSteps ?? 20;
@@ -91,6 +101,7 @@ export class Agent {
 
     this.state = createAgentState(goal);
     this.memory.clear();
+    this.recoverySteps = [];
     this.pendingAction = null;
     this.pendingApproval = null;
     this.trace = { goal, steps: [] };
@@ -115,18 +126,27 @@ export class Agent {
       !this.pendingApproval &&
       this.state.stepCount < this.maxSteps
     ) {
+      let action: BrowserAction | null = null;
+      let executed = false;
       try {
-        const action = await this.think();
+        action = await this.think();
 
         if (!action) {
+          if (this.recoverySteps.length) {
+            this.failElementRecovery();
+            break;
+          }
           this.state.completed = true;
           break;
         }
 
         await this.act(action);
         if (this.pendingApproval || this.halted) {
+          this.finishElementRecovery("interrupted", action);
           break;
         }
+        executed = true;
+        this.finishElementRecovery("recovered", action);
 
         const evaluation = await this.reflect(action);
         if (!evaluation.shouldContinue) {
@@ -134,6 +154,9 @@ export class Agent {
           this.halted = true;
         }
       } catch (error) {
+        if (!executed && action && (await this.recoverElementAction(error, action)))
+          continue;
+        this.finishElementRecovery("interrupted");
         this.recordError(error);
         this.halted = true;
       }
@@ -270,14 +293,19 @@ export class Agent {
     }
 
     pending.traceStep.approvalStatus = "approved";
+    let executed = false;
     try {
       await this.executeAndRecordAction(pending.action, pending.traceStep);
+      executed = true;
+      this.finishElementRecovery("recovered", pending.action);
       const evaluation = await this.reflect(pending.action);
       if (!evaluation.shouldContinue) {
         this.state.errors.push(evaluation.reason);
         this.halted = true;
       }
     } catch (error) {
+      if (!executed && (await this.recoverElementAction(error, pending.action)))
+        return this.loop();
       this.recordTraceError(pending.traceStep, error);
       this.recordError(error);
       this.halted = true;
@@ -341,9 +369,87 @@ export class Agent {
         ...step,
         thought: { ...step.thought },
         result: { ...step.result },
+        ...(step.elementRecovery
+          ? { elementRecovery: structuredClone(step.elementRecovery) }
+          : {}),
         evaluation: step.evaluation ? { ...step.evaluation } : undefined
       }))
     };
+  }
+
+  getElementRecoveryContext(): {
+    attempt: number;
+    maxAttempts: number;
+    failedSelectors: string[];
+    reason: string;
+    observationId: string | null;
+  } | null {
+    const recovery = this.recoverySteps.at(-1)?.elementRecovery;
+    return recovery
+      ? {
+          attempt: this.recoverySteps.length,
+          maxAttempts: ELEMENT_REPLAN_LIMIT,
+          failedSelectors: this.failedElementSelectors(),
+          reason: recovery.reason,
+          observationId: this.state.currentObservation?.id ?? null
+        }
+      : null;
+  }
+
+  private failedElementSelectors(): string[] {
+    return this.recoverySteps.flatMap((step) =>
+      step.elementRecovery ? [step.elementRecovery.invalidSelector] : []
+    );
+  }
+
+  private async recoverElementAction(
+    error: unknown,
+    action: BrowserAction
+  ): Promise<boolean> {
+    if (!this.recoverElementActions || !isRecoverableElementError(error, action))
+      return false;
+    const step = this.actionTraceStep ?? this.currentTraceStep;
+    if (!step || !("selector" in action)) return false;
+    this.recordTraceError(step, error);
+    step.elementRecovery = {
+      attempt: this.recoverySteps.length,
+      status: "retrying",
+      reason:
+        "The selected target is unavailable or ambiguous. Re-observe and choose a different current-page action; do not retry the failed selector.",
+      invalidSelector: action.selector
+    };
+    this.recoverySteps.push(step);
+    this.pendingAction = null;
+    this.actionTraceStep = null;
+    if (this.recoverySteps.length > ELEMENT_REPLAN_LIMIT) {
+      this.failElementRecovery();
+      return true;
+    }
+    const observation = await this.observe();
+    step.elementRecovery.recoveryObservationId = observation.id;
+    return true;
+  }
+
+  private finishElementRecovery(
+    status: "recovered" | "exhausted" | "interrupted",
+    action?: BrowserAction
+  ): void {
+    for (const step of this.recoverySteps) {
+      if (!step.elementRecovery) continue;
+      step.elementRecovery.status = status;
+      if (action) step.elementRecovery.replannedAction = sanitizeActionForTrace(action);
+    }
+    this.recoverySteps = [];
+  }
+
+  private failElementRecovery(): void {
+    this.finishElementRecovery("exhausted");
+    this.recordError(
+      new Error(
+        `${ELEMENT_RECOVERY_FAILED}: No valid replacement action was produced within the bounded recovery window.`
+      )
+    );
+    this.halted = true;
   }
 
   private createReasoningPrompt(observation: Observation): string {
@@ -354,6 +460,12 @@ export class Agent {
       "Choose exactly one next browser action that advances the goal.",
       "Return only valid BrowserAction JSON, or null when the goal is complete.",
       "Supported types: goto, navigate, click, type, getText, wait, screenshot, assert, getCurrentUrl.",
+      ...(this.recoverElementActions
+        ? [
+            "For click/type, use one unique visible enabled selector from the current observation. Element IDs are observation-local labels, not DOM IDs. Never convert an element ID into a CSS selector. For ambiguous links, choose their observed URL with navigate.",
+            `Element recovery: ${JSON.stringify(this.getElementRecoveryContext())}`
+          ]
+        : []),
       `Goal: ${this.state.goal}`,
       `Step: ${this.state.stepCount}`,
       `Current observation: ${JSON.stringify(observation)}`,
@@ -398,6 +510,13 @@ export class Agent {
     action: BrowserAction,
     traceStep: AgentTraceStep | null
   ): Promise<void> {
+    if (this.recoverElementActions) {
+      validateElementReference(
+        action,
+        this.state.currentObservation,
+        this.failedElementSelectors()
+      );
+    }
     await this.executeAction(action);
     this.state.stepCount += 1;
     this.state.actionHistory.push(action);

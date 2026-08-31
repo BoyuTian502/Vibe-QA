@@ -428,6 +428,8 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
               [
                 "Return only one BrowserAction JSON object or null, with no explanation.",
                 "Use canonical fields: navigate {url}, click {selector}, type {selector,value}, wait {ms}, screenshot {}, getText {selector}, getCurrentUrl {}, assert {selector,containsText}. Include the action type in the type field.",
+                "For click/type, copy a unique visible enabled selector from the current observation. Observation IDs such as element-7 are NOT DOM IDs or CSS selectors. For ambiguous links use navigate with the observed href. Do not reuse a failed target.",
+                `Element recovery: ${redactCredentialValues(JSON.stringify(agent.getElementRecoveryContext()), input.credentials)}`,
                 redactCredentialValues(prompt, input.credentials)
               ].join("\n")
             );
@@ -464,6 +466,7 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
     const agent: Agent = new Agent({
       browser: evidenceBrowser,
       llmClient: controller,
+      recoverElementActions: true,
       maxSteps: 12,
       safetyPolicy: {
         evaluate: (action, context) => {
@@ -551,20 +554,33 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
       modelInvocationCount: metadata.ollamaInvocationCount,
       terminationReason: agent.getPendingApproval()
         ? "approval-required"
-        : agent.state.errors.length
-          ? "agent-error"
-          : agent.state.stepCount >= 12
-            ? "max-steps"
-            : metadata.postHandoffTerminationReason &&
-                metadata.postHandoffTerminationReason !== "none"
-              ? metadata.postHandoffTerminationReason
-              : "planner-stopped",
+        : agent.state.errors.some((error) =>
+              error.startsWith("STALE_ELEMENT_RECOVERY_FAILED")
+            )
+          ? "STALE_ELEMENT_RECOVERY_FAILED"
+          : agent.state.errors.length
+            ? "agent-error"
+            : agent.state.stepCount >= 12
+              ? "max-steps"
+              : metadata.postHandoffTerminationReason &&
+                  metadata.postHandoffTerminationReason !== "none"
+                ? metadata.postHandoffTerminationReason
+                : "planner-stopped",
       startedAt: "",
       completedAt: "",
       durationMs: 0,
       pagesVisited: unique(observations.map((observation) => observation.url)),
       stateCount: unique(observations.map(createPageStateFingerprint)).length,
       actionCount: agent.state.actionHistory.length,
+      elementRecovery: {
+        failedTargets: result.trace.steps.filter((step) => step.elementRecovery).length,
+        replanAttempts: result.trace.steps.filter(
+          (step) => step.elementRecovery?.recoveryObservationId
+        ).length,
+        recoveredTargets: result.trace.steps.filter(
+          (step) => step.elementRecovery?.status === "recovered"
+        ).length
+      },
       escalationReason: metadata.escalationReason,
       plannerDecisions: metadata.plannerDecisions.map((decision) => ({
         phase: decision.phase,
@@ -1065,7 +1081,9 @@ function explorationToTestResult(
   const executedSteps: ExecutedTestStep[] = [];
   const bugReports: BugReport[] = [];
   for (const [traceIndex, step] of trace.steps.entries()) {
-    if (!step.action) continue;
+    // Locator recovery is an Agent event, not evidence of a website defect.
+    // Preserve it in the trace without counting it as an executed browser action.
+    if (!step.action || step.elementRecovery) continue;
     const observation =
       trace.steps.slice(traceIndex + 1).find((next) => next.observation)?.observation ??
       null;

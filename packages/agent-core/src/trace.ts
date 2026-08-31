@@ -9,6 +9,14 @@ export interface AgentTrace {
 }
 
 export interface AgentTraceStep {
+  elementRecovery?: {
+    attempt: number;
+    status: "retrying" | "recovered" | "exhausted" | "interrupted";
+    reason: string;
+    invalidSelector: string;
+    recoveryObservationId?: string;
+    replannedAction?: BrowserAction;
+  };
   timestamp: string;
   observation: Observation | null;
   thought: {

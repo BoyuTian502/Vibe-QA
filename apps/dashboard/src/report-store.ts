@@ -182,11 +182,12 @@ function parseTimeline(
   let actionIndex = 0;
   return traceSteps.map((traceStep, index) => {
     const action = asOptionalRecord(traceStep.action);
+    const recovery = asOptionalRecord(traceStep.elementRecovery);
     const observation = asOptionalRecord(traceStep.observation);
     const result = asOptionalRecord(traceStep.result);
     const evaluation = asOptionalRecord(traceStep.evaluation);
-    const matchingStep = action ? reportSteps[actionIndex] : undefined;
-    if (action) {
+    const matchingStep = action && !recovery ? reportSteps[actionIndex] : undefined;
+    if (action && !recovery) {
       actionIndex += 1;
     }
 
@@ -201,11 +202,15 @@ function parseTimeline(
     return {
       index,
       timestamp: nullableString(traceStep.timestamp),
-      label: action
-        ? (matchingStep?.name ?? describeAction(action))
-        : index === 0
-          ? "Capture the starting page"
-          : "Observe the page after the action",
+      label: recovery
+        ? recovery.status === "recovered"
+          ? "Recovered unavailable target"
+          : "Replanned unavailable target"
+        : action
+          ? (matchingStep?.name ?? describeAction(action))
+          : index === 0
+            ? "Capture the starting page"
+            : "Observe the page after the action",
       status,
       detail: nullableString(evaluation?.reason),
       error: nullableString(result?.error),

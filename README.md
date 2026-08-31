@@ -181,6 +181,17 @@ strategy (`adaptive-v2` for Exploratory), model invocation count, decision outco
 visited pages/states, action count, duration, and termination reason. Internal
 planner selection and benchmark diagnostics are not exposed as product controls.
 
+Exploratory click/type targets must match a unique, visible, enabled selector in
+the current observation. Observation labels such as `element-7` are not DOM IDs.
+An unavailable/ambiguous target or a pre-interaction locator failure triggers a
+fresh observation and at most two replans for that failed-action episode. Failed
+selectors are not replayed; only the planner can choose a replacement, which must
+pass the existing safety policy. Null or repeated invalid replacements end with
+`STALE_ELEMENT_RECOVERY_FAILED`. Failures after a click was dispatched, navigation
+timeouts, and infrastructure errors are not retried. Recovery events and screenshots
+remain in the trace, separately from website bug findings. Functional, Regression,
+and benchmark callers do not enable this opt-in recovery behavior.
+
 For Functional/Regression, enter literal, case-sensitive text such as `Dashboard`
 in **Expected visible page text**. Leading/trailing whitespace is ignored, and
 repeated spaces, tabs, and line breaks are collapsed to a single space. For a

@@ -14,6 +14,11 @@ export interface ProductExecution {
   pagesVisited: string[];
   stateCount: number;
   actionCount: number;
+  elementRecovery?: {
+    failedTargets: number;
+    replanAttempts: number;
+    recoveredTargets: number;
+  };
   escalationReason?: string | null;
   plannerDecisions?: Array<{
     phase: string;

@@ -31,6 +31,7 @@ describe("product form to execution", () => {
     );
     const generate = vi
       .fn()
+      .mockResolvedValueOnce(JSON.stringify({ type: "click", selector: "#element-7" }))
       .mockResolvedValueOnce(
         JSON.stringify({ type: "navigate", url: `${targetUrl}second` })
       )
@@ -73,7 +74,7 @@ describe("product form to execution", () => {
       expect(report.execution).toMatchObject({
         requestedMode: "exploratory",
         strategy: "adaptive-v2",
-        modelInvocationCount: 2,
+        modelInvocationCount: 3,
         actionCount: 1
       });
       expect(report.execution?.pagesVisited).toEqual([targetUrl, `${targetUrl}second`]);
@@ -86,12 +87,23 @@ describe("product form to execution", () => {
       expect(report.executedSteps.map((step) => step.action.type)).toEqual([
         "navigate"
       ]);
+      expect(report.execution?.elementRecovery).toEqual({
+        failedTargets: 1,
+        replanAttempts: 1,
+        recoveredTargets: 1
+      });
+      expect(report.trace.steps[0]?.elementRecovery).toMatchObject({
+        status: "recovered",
+        invalidSelector: "#element-7"
+      });
+      expect(generate.mock.calls[1]?.[0]).toContain('"failedSelectors":["#element-7"]');
       const detail = await (
         await fetch(`${dashboard.url}/runs/${completed.runId}`)
       ).text();
       expect(detail).toContain("Exploratory journey");
       expect(detail).toContain("Autonomous exploration");
-      expect(detail).toContain("2 model calls");
+      expect(detail).toContain("3 model calls");
+      expect(detail).toContain("Recovered unavailable target");
 
       const callsAfterExploration = generate.mock.calls.length;
       for (const mode of ["functional", "regression"] as const) {
