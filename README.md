@@ -183,6 +183,24 @@ arbitrary multi-page or CRUD workflows from prose; existing structured
 TestCase/TestRunner APIs and advanced injectable planning remain available for
 those paths. Browser execution and the safety gate remain unchanged.
 
+Functional objectives are no longer just report titles. The deterministic Alpha
+form supports a page-text check, the existing temporary-login flow, or one
+navigation interaction. For example, use **Navigate to Product Center and verify
+the destination page loads** with **Product Center** (or the site's exact visible
+label, such as **产品中心**) as the single-line expected text. That field names both
+the navigation control and the final text assertion; no translation or general
+natural-language workflow planning is performed. The control must be unique,
+visible, enabled, and a link, button, menu item, or list item. The run clicks it
+through the existing Agent/safety gate, requires a URL change (including hash
+routes), then checks the destination text. An unchanged homepage cannot pass.
+
+Multiple navigation targets, same-URL menus/scrolling, separate navigation labels
+and expectations, login followed by navigation, and arbitrary form submissions
+need an explicit structured TestCase. Unsupported or ambiguous requests fail
+clearly instead of falling back to text-only success. Simple requests such as
+**Verify that the homepage loads successfully** still use the normalized text
+check without a click. Regression and Exploratory defaults are unchanged.
+
 No paid API key is required for these defaults. Exploratory uses the existing
 `qwen2.5-coder:7b` Ollama client. Start Ollama and install that model before model
 escalation is needed. Its IPv4-safe endpoint can be configured with:

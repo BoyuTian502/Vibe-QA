@@ -28,6 +28,11 @@ import {
 } from "@vibeqa/test-engine";
 
 import { alphaExecutionPolicy, type QATestMode } from "./alpha-policy.js";
+import {
+  assertFunctionalPlan,
+  checkFunctionalNavigationResult,
+  localFunctionalKind
+} from "./functional-objective.js";
 export type { QATestMode } from "./alpha-policy.js";
 
 import {
@@ -256,8 +261,15 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
       const executionBrowser = input.credentials
         ? new SecureAuthenticatedBrowserController(browser, input.credentials)
         : browser;
+      const functionalCase =
+        policy.strategy === "deterministic"
+          ? (testCase ?? (await createLocalTestCase(input, executionBrowser)))
+          : null;
+      if (input.mode === "functional" && functionalCase) {
+        assertFunctionalPlan(input.objective, functionalCase);
+      }
       const result = sanitizeTestResult(
-        policy.strategy === "adaptive"
+        !functionalCase
           ? await this.runExploration(
               executionBrowser,
               input,
@@ -265,12 +277,14 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
             )
           : await new TestTask({
               browser: executionBrowser,
-              testCase:
-                testCase ?? (await createLocalTestCase(input, executionBrowser)),
+              testCase: functionalCase,
               screenshotDirectory: this.artifactStore.screenshotDirectory(runId)
             }).run(),
         input.credentials
       );
+      if (input.mode === "functional") {
+        checkFunctionalNavigationResult(input.objective, result);
+      }
       await this.artifactStore.save(runId, result, storedConfiguration(input));
       return { runId, status: result.status };
     } catch (error) {
@@ -722,6 +736,13 @@ async function createLocalTestCase(
   browser: BrowserController
 ): Promise<TestCase> {
   const steps: TestCase["steps"] = [];
+  const kind =
+    input.mode === "functional"
+      ? localFunctionalKind(input.objective, input.credentials !== null)
+      : "text";
+  if (kind === "navigation") {
+    steps.push(...(await createLocalNavigationSteps(input, browser)));
+  }
   if (input.credentials) {
     await browser.navigate(input.websiteUrl);
     const observation = await browser.observe();
@@ -789,6 +810,77 @@ async function createLocalTestCase(
     expected: { requiredText: input.expectedBehavior }
   });
   return { goal: input.objective, startUrl: input.websiteUrl, steps };
+}
+
+async function createLocalNavigationSteps(
+  input: CreateTestRequestInput,
+  browser: BrowserController
+): Promise<TestCase["steps"]> {
+  const lines = input.expectedBehavior
+    .split(/\r\n|[\r\n\u2028\u2029]/u)
+    .map((line) => line.replace(/\s+/gu, " ").trim())
+    .filter(Boolean);
+  const label = lines[0];
+  if (lines.length !== 1 || !label) {
+    throw new TestRequestValidationError(
+      "A local navigation check requires one exact navigation control label in Expected visible page text. Use a structured TestCase for separate targets and expectations."
+    );
+  }
+  await browser.navigate(input.websiteUrl);
+  await browser.wait(500);
+  const observation = await browser.observe();
+  // Exact, visible control-like elements only. List items cover SPA menus without
+  // changing the shared observation collector or Explorer candidate generation.
+  const selector = `:is(a, button, [role="link"], [role="button"], [role="menuitem"], li):visible:not(:disabled):not([aria-disabled="true"]):text-is(${JSON.stringify(label)})`;
+  try {
+    if (!(await browser.getText("body")).replace(/\s+/gu, " ").includes(label)) {
+      throw new Error("Label absent from page");
+    }
+    const text = await browser.getText(selector);
+    if (text.replace(/\s+/gu, " ").trim() !== label) throw new Error("Label mismatch");
+  } catch {
+    throw new TestRequestValidationError(
+      "Navigation target is missing, ambiguous, or unsupported. Expected visible page text must name one visible navigation control exactly; use a structured TestCase otherwise."
+    );
+  }
+  const matchingLinks = observation.elements.filter(
+    (element) =>
+      element.visible &&
+      element.enabled &&
+      element.href &&
+      [element.text, element.accessibleName].some(
+        (name) => name?.replace(/\s+/gu, " ").trim() === label
+      )
+  );
+  if (
+    matchingLinks.some(
+      (element) =>
+        element.href &&
+        new URL(element.href).origin !== new URL(input.websiteUrl).origin
+    )
+  ) {
+    throw new TestRequestValidationError(
+      "Navigation target is outside the submitted website."
+    );
+  }
+  return [
+    { name: "Wait for homepage navigation", action: { type: "wait", ms: 500 } },
+    {
+      name: "Open requested navigation target",
+      action: { type: "click", selector },
+      expected: { urlChanged: true }
+    },
+    { name: "Wait for destination page", action: { type: "wait", ms: 500 } },
+    ...(matchingLinks[0]?.href
+      ? [
+          {
+            name: "Verify destination URL",
+            action: { type: "getCurrentUrl" as const },
+            expected: { url: matchingLinks[0].href }
+          }
+        ]
+      : [])
+  ];
 }
 
 function explorationToTestResult(

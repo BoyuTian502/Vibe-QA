@@ -69,6 +69,15 @@ automatic regression selection, and production persistence remain deferred.
   agent observation samples, prompts, and traces are not expanded.
 - Complex known paths continue to use existing structured TestCase/TestRunner
   APIs. The Alpha form does not synthesize arbitrary CRUD or multi-page workflows.
+- Functional objective handling is bounded and deterministic: page-text check,
+  temporary login, or one exact-label navigation action followed by verification.
+  For navigation, the single-line expected text also identifies the unique visible
+  control. A successful click and URL change are required before accepting the
+  final text assertion. Unsupported/ambiguous requests stop, never degrade into
+  assertion-only success. Same-URL interactions and longer workflows require
+  explicit structured TestCase/TestRunner APIs. The optional injected Functional
+  planner is also checked for action-before-verification consistency; it is not
+  enabled by default. No LLM judge, router, or browser API is added.
 - Exploratory uses the existing Adaptive V2 thresholds, bounded null retry and
   completion gate, with a 12-action product budget. It can stop when safe local
   candidates are exhausted; it does not expand total budgets to improve scores.

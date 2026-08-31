@@ -39,7 +39,11 @@ describe("UserTestWorkflow", () => {
       });
       await expect(
         executor.execute(
-          { ...testInput(mode), expectedBehavior: "  Sign\t in\r\nSign in  " },
+          {
+            ...testInput(mode),
+            objective: "Verify that the homepage loads successfully.",
+            expectedBehavior: "  Sign\t in\r\nSign in  "
+          },
           "local-default"
         )
       ).resolves.toMatchObject({ status: "passed" });
@@ -71,7 +75,11 @@ describe("UserTestWorkflow", () => {
     });
     await expect(
       executor.execute(
-        { ...testInput("functional"), expectedBehavior: "Missing content" },
+        {
+          ...testInput("functional"),
+          objective: "Verify that the homepage loads successfully.",
+          expectedBehavior: "Missing content"
+        },
         "missing-text"
       )
     ).resolves.toMatchObject({ status: "failed" });
@@ -221,6 +229,10 @@ describe("UserTestWorkflow", () => {
               }
             },
             {
+              name: "Submit login",
+              action: { type: "click", selector: "#sign-in" }
+            },
+            {
               name: "Capture evidence",
               action: { type: "screenshot", path: "C:/unsafe/model-path.png" }
             },
@@ -259,7 +271,7 @@ describe("UserTestWorkflow", () => {
       selector: 'input[name="password"]',
       value: "[REDACTED]"
     });
-    expect(artifacts.saved?.executedSteps[1]?.action).toEqual({
+    expect(artifacts.saved?.executedSteps[2]?.action).toEqual({
       type: "screenshot"
     });
     expect(JSON.stringify(artifacts.saved)).not.toContain("private-value");
