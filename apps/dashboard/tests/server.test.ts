@@ -82,7 +82,7 @@ describe("dashboard server", () => {
       expect(historyHtml).toContain("QA run history");
       expect(historyHtml).toContain("Run time");
       expect(historyHtml).toContain("Status");
-      expect(historyHtml).toContain("Bugs found");
+      expect(historyHtml).toContain("Findings");
       expect(historyHtml).toContain("Screenshots");
       expect(historyHtml).toContain("Duration");
       expect(historyHtml).toContain("5.3 s");
@@ -103,6 +103,12 @@ describe("dashboard server", () => {
 
       const selectedRun = await fetch(`${dashboard.url}/runs?run=demo-run-001`);
       expect(selectedRun.url).toBe(`${dashboard.url}/runs/demo-run-001`);
+
+      for (const path of ["/runs/deleted-run", "/runs?run=deleted-run"]) {
+        const missing = await fetch(`${dashboard.url}${path}`);
+        expect(missing.status).toBe(404);
+        expect(await missing.text()).toContain("Run unavailable");
+      }
 
       const apiResponse = await fetch(`${dashboard.url}/api/runs/demo-run-001`);
       expect(apiResponse.status).toBe(200);
@@ -144,7 +150,7 @@ describe("dashboard server", () => {
     try {
       const response = await fetch(dashboard.url);
       expect(response.status).toBe(200);
-      expect(await response.text()).toContain("No demo reports found");
+      expect(await response.text()).toContain("No test runs yet");
 
       const newTestPage = await fetch(`${dashboard.url}/tests/new`);
       const newTestHtml = await newTestPage.text();

@@ -1,3 +1,5 @@
+import type { ProductOutcome } from "./product-outcome.js";
+
 export type DashboardRunStatus = "passed" | "failed" | "unknown";
 
 export interface DashboardRunSummary {
@@ -57,6 +59,8 @@ export interface DashboardScreenshot {
 }
 
 export interface DashboardRun extends DashboardRunSummary {
+  outcome?: ProductOutcome;
+  targetUrl?: string | null;
   execution?: {
     mode: string;
     strategy: string;

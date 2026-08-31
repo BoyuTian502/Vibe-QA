@@ -34,6 +34,7 @@ import {
 
 import { alphaExecutionPolicy, type QATestMode } from "./alpha-policy.js";
 import type { ProductTestResult } from "./product-execution.js";
+import { classifyProductOutcome, type ProductOutcome } from "./product-outcome.js";
 import { createFunctionalFormSteps, parseFunctionalForm } from "./functional-form.js";
 import {
   assertFunctionalPlan,
@@ -69,6 +70,7 @@ export interface StoredTestConfiguration {
 export type UserTestRequestStatus = "queued" | "running" | "completed" | "failed";
 
 export interface UserTestRequest {
+  outcome?: ProductOutcome;
   id: string;
   websiteUrl: string;
   objective: string;
@@ -85,6 +87,7 @@ export interface UserTestRequest {
 }
 
 export interface UserTestExecution {
+  outcome?: ProductOutcome;
   runId: string;
   status: TestStatus;
 }
@@ -222,9 +225,15 @@ export class UserTestWorkflow {
       request.status = "completed";
       request.runId = execution.runId;
       request.testStatus = execution.status;
+      request.outcome =
+        execution.outcome ?? classifyProductOutcome({ status: execution.status });
     } catch (error) {
       request.status = "failed";
       request.error = errorMessage(error, input.credentials);
+      request.outcome = classifyProductOutcome({
+        status: "failed",
+        errors: [request.error]
+      });
     } finally {
       request.completedAt = this.now().toISOString();
       input.credentials?.clear();
@@ -326,7 +335,7 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
         checkFunctionalNavigationResult(input.objective, result);
       }
       await this.artifactStore.save(runId, result, storedConfiguration(input));
-      return { runId, status: result.status };
+      return { runId, status: result.status, outcome: classifyProductOutcome(result) };
     } catch (error) {
       throw new Error(errorMessage(error, input.credentials));
     } finally {
@@ -846,12 +855,12 @@ export function validateCreateTestRequest(
   }
   if (expectedBehavior.length > MAX_EXPECTED_BEHAVIOR_LENGTH) {
     throw new TestRequestValidationError(
-      `Expected behavior must be ${MAX_EXPECTED_BEHAVIOR_LENGTH} characters or fewer.`
+      `Expected visible page text must be ${MAX_EXPECTED_BEHAVIOR_LENGTH} characters or fewer.`
     );
   }
   if (containsLikelySecret(expectedBehavior)) {
     throw new TestRequestValidationError(
-      "Do not include passwords, API keys, tokens, or other secrets in the expected behavior."
+      "Do not include passwords, API keys, tokens, or other secrets in the expected visible page text."
     );
   }
   if (websiteUrl.length === 0) {

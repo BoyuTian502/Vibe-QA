@@ -6,6 +6,7 @@ import type {
   DashboardTimelineEvent
 } from "./types.js";
 import type { BugAnalysis } from "./bug-analysis.js";
+import { classifyProductOutcome, type ProductOutcome } from "./product-outcome.js";
 import type {
   CreateTestRequestInput,
   QATestMode,
@@ -38,8 +39,8 @@ export const AUTHENTICATION_FORM_SCRIPT = `
     const exploratory = document.querySelector('input[name="mode"]:checked')?.value === "exploratory";
     if (expected instanceof HTMLTextAreaElement) expected.required = !exploratory;
     if (hint) hint.textContent = exploratory
-      ? "Optional. The agent explores autonomously from your target page and objective. Text entered here is an additional final-page check."
-      : "Enter visible page text to verify after the workflow. Each non-empty line must appear on the final page.";
+      ? "Optional. Exploratory mode autonomously navigates and evaluates safe UI states. Text adds a final-page check."
+      : "Required for this local check. Enter text expected on the final page; every non-empty line must appear. This is not a natural-language instruction.";
   };
   document.querySelectorAll('input[name="mode"]').forEach(input => input.addEventListener("change", syncMode));
   syncMode();
@@ -112,14 +113,6 @@ export function renderTestCreationPage(
           </div>
           <form class="test-request-form" method="post" action="/tests">
             ${error ? `<div class="form-error" role="alert">${escapeHtml(error)}</div>` : ""}
-            <fieldset class="mode-fieldset">
-              <legend>Testing mode</legend>
-              <div class="mode-control">
-                ${renderModeOption("functional", selectedMode, availableModes)}
-                ${renderModeOption("exploratory", selectedMode, availableModes)}
-                ${renderModeOption("regression", selectedMode, availableModes)}
-              </div>
-            </fieldset>
             <label class="field-group" for="websiteUrl">
               <span>Target page</span>
               <input
@@ -133,6 +126,14 @@ export function renderTestCreationPage(
                 required
               />
             </label>
+            <fieldset class="mode-fieldset">
+              <legend>Testing mode</legend>
+              <div class="mode-control">
+                ${renderModeOption("functional", selectedMode, availableModes)}
+                ${renderModeOption("regression", selectedMode, availableModes)}
+                ${renderModeOption("exploratory", selectedMode, availableModes)}
+              </div>
+            </fieldset>
             <label class="field-group" for="objective">
               <span>Test objective</span>
               <textarea
@@ -156,7 +157,7 @@ export function renderTestCreationPage(
                 ${selectedMode === "exploratory" ? "" : "required"}
               >${escapeHtml(values.expectedBehavior)}</textarea>
             </label>
-            <p id="expected-text-hint" class="header-summary">${selectedMode === "exploratory" ? "Optional. The agent explores autonomously from your target page and objective. Text entered here is an additional final-page check." : "Enter visible page text to verify after the workflow. Each non-empty line must appear on the final page."}</p>
+            <p id="expected-text-hint" class="header-summary">${selectedMode === "exploratory" ? "Optional. Exploratory mode autonomously navigates and evaluates safe UI states. Text adds a final-page check." : "Required for this local check. Enter text expected on the final page; every non-empty line must appear. This is not a natural-language instruction."}</p>
             <section class="auth-configuration" aria-labelledby="authentication-heading">
               <div class="auth-heading">
                 <div>
@@ -197,7 +198,7 @@ export function renderTestCreationPage(
                   />
                 </label>
               </div>
-              <p>Credentials stay in memory for this run and are never sent to the planner or saved with evidence.</p>
+              <p>Credentials are kept in memory for this run and are not included in planner prompts, reports, or evidence.</p>
             </section>
             <div class="form-actions">
               <span>Planning and browser execution use the existing safety policy.</span>
@@ -232,12 +233,13 @@ export function renderTestRequestPage(
             <code class="request-id">${escapeHtml(request.id)}</code>
           </header>
 
-          <section class="panel request-status-panel request-${escapeHtml(request.status)} ${request.testStatus ? `request-result-${escapeHtml(request.testStatus)}` : ""}">
+          <section data-outcome="${request.outcome?.kind ?? request.status}" class="panel request-status-panel request-${escapeHtml(request.status)} outcome-${request.outcome?.tone ?? "attention"}">
             <div class="request-status-mark" aria-hidden="true">${request.status === "completed" ? (request.testStatus === "passed" ? "OK" : "!") : request.status === "failed" ? "!" : "..."}</div>
             <div class="request-status-copy">
               <p class="section-label">Execution status</p>
               <h2>${escapeHtml(statusTitle)}</h2>
               <p>${escapeHtml(statusCopy)}</p>
+              ${request.error ? `<details><summary>Execution details</summary><p>${escapeHtml(request.error)}</p></details>` : ""}
             </div>
             <span class="request-status-tag">${escapeHtml(request.status)}</span>
           </section>
@@ -247,12 +249,12 @@ export function renderTestRequestPage(
             ${renderRequestFact("Authentication", request.authenticationUsed ? "Temporary login" : "None")}
             ${renderRequestFact("Created", formatTimestamp(request.createdAt))}
             ${renderRequestFact("Completed", request.completedAt ? formatTimestamp(request.completedAt) : "Pending")}
-            ${renderRequestFact("Test result", request.testStatus ? statusLabelFor(request.testStatus) : "Pending")}
+            ${renderRequestFact("Test result", request.outcome?.label ?? (request.testStatus ? statusLabelFor(request.testStatus) : "Pending"))}
           </section>
 
           <section class="panel expected-behavior-panel">
             <span>Expected visible page text</span>
-            <p>${escapeHtml(request.expectedBehavior)}</p>
+            <p>${escapeHtml(request.expectedBehavior || "Not specified")}</p>
           </section>
 
           <div class="request-actions">
@@ -272,13 +274,9 @@ function renderReport(
   activeSection: DashboardSection,
   analysis: BugAnalysis | null
 ): string {
-  const statusLabel =
-    run.status === "failed" ? "Issue found" : statusLabelFor(run.status);
-  const statusSummary =
-    run.primaryIssue?.description ??
-    (run.status === "passed"
-      ? "The selected workflow completed without a detected issue."
-      : "The run completed without a structured issue summary.");
+  const outcome = runOutcome(run);
+  const statusLabel = outcome.label;
+  const statusSummary = outcome.summary;
 
   return `
     <div class="app-frame">
@@ -296,14 +294,20 @@ function renderReport(
           </div>
         </header>
 
-        <section id="overview" class="status-band status-${escapeHtml(run.status)}">
+        <section id="overview" data-outcome="${outcome.kind}" class="status-band status-${escapeHtml(run.status)} outcome-${outcome.tone}">
           <div class="status-mark" aria-hidden="true">${run.status === "failed" ? "!" : "OK"}</div>
           <div class="status-copy">
             <p class="section-label">Test status</p>
             <h2>${escapeHtml(statusLabel)}</h2>
             <p>${escapeHtml(statusSummary)}</p>
           </div>
-          <span class="status-tag status-tag-${escapeHtml(run.status)}">${escapeHtml(statusLabel)}</span>
+          <span class="status-tag outcome-tag-${outcome.tone}">${escapeHtml(statusLabel)}</span>
+        </section>
+
+        <section class="run-context" aria-label="Test context">
+          ${renderRequestFact("Mode", run.execution?.mode ? sentenceCase(run.execution.mode) : "Recorded workflow")}
+          ${renderRequestFact("Target URL", run.targetUrl ?? "Not recorded")}
+          ${renderRequestFact("Finished", run.execution ? terminationLabel(run.execution.terminationReason) : outcome.label)}
         </section>
 
         <section class="metrics" aria-label="Run summary">
@@ -322,7 +326,7 @@ function renderReport(
               </div>
               <span class="count-label">${run.stepCount} total</span>
             </div>
-            ${run.execution ? `<p class="header-summary execution-summary">${escapeHtml(run.execution.mode)} / ${run.execution.strategy === "adaptive-v2" ? "Autonomous exploration" : "Planned workflow"}. ${run.execution.modelInvocationCount} model calls, ${run.execution.pageCount} pages, ${run.execution.stateCount} states. Stopped: ${escapeHtml(run.execution.terminationReason.replaceAll("-", " "))}.</p>` : ""}
+            ${run.execution ? `<p class="header-summary execution-summary">${run.execution.mode === "exploratory" ? "Autonomous exploration" : "Planned workflow"}. ${run.execution.pageCount} pages and ${run.execution.stateCount} page states observed.</p>` : ""}
             ${renderSteps(run.steps)}
           </section>
 
@@ -330,10 +334,10 @@ function renderReport(
             <div class="section-heading">
               <div>
                 <p class="section-label">Evaluation</p>
-                <h2>Detected issue</h2>
+                <h2>${run.primaryIssue ? "Detected issue" : "Run outcome"}</h2>
               </div>
             </div>
-            ${renderIssue(run.primaryIssue)}
+            ${run.primaryIssue ? renderIssue(run.primaryIssue) : `<div class="issue-content"><h3>${escapeHtml(outcome.label)}</h3><p>${escapeHtml(outcome.summary)}</p></div>`}
           </section>
         </div>
 
@@ -345,7 +349,7 @@ function renderReport(
             </div>
             ${renderAnalysisSource(analysis)}
           </div>
-          ${renderBugAnalysis(analysis, run.primaryIssue !== null)}
+          ${!run.primaryIssue && outcome.kind !== "PASSED" ? '<p class="empty-copy">No target-site bug analysis is generated for this execution outcome.</p>' : renderBugAnalysis(analysis, run.primaryIssue !== null)}
         </section>
 
         <section id="timeline" class="panel timeline-panel">
@@ -356,7 +360,11 @@ function renderReport(
             </div>
             <span class="count-label">${run.timeline.length} events</span>
           </div>
-          ${renderTimeline(run.timeline)}
+          <details class="trace-details"><summary>View action timeline and technical details</summary>
+            ${run.execution ? `<p class="execution-summary">${run.execution.modelInvocationCount} model calls. Termination: <code>${escapeHtml(run.execution.terminationReason)}</code>.</p>` : ""}
+            ${run.errors.length ? `<ul class="diagnostic-errors">${run.errors.map((error) => `<li>${escapeHtml(error)}</li>`).join("")}</ul>` : ""}
+            ${renderTimeline(run.timeline)}
+          </details>
         </section>
 
         <section id="evidence" class="evidence-section">
@@ -458,7 +466,7 @@ function renderHistory(runs: DashboardRun[]): string {
           <div>
             <p class="kicker">Test archive</p>
             <h1>QA run history</h1>
-            <p class="header-summary">Every local demo report, automatically indexed newest first.</p>
+            <p class="header-summary">Local test runs, newest first.</p>
           </div>
           <div class="run-identity">
             <span>Indexed runs</span>
@@ -470,7 +478,7 @@ function renderHistory(runs: DashboardRun[]): string {
         <section class="metrics history-metrics" aria-label="History summary">
           ${renderMetric("Total runs", String(runs.length))}
           ${renderMetric("Pass rate", `${passRate}%`)}
-          ${renderMetric("Bugs found", String(totalBugs))}
+          ${renderMetric("Findings", String(totalBugs))}
           ${renderMetric("Screenshots", String(totalScreenshots))}
         </section>
 
@@ -487,7 +495,7 @@ function renderHistory(runs: DashboardRun[]): string {
               <span role="columnheader">Run</span>
               <span role="columnheader">Run time</span>
               <span role="columnheader">Status</span>
-              <span role="columnheader">Bugs found</span>
+              <span role="columnheader">Findings</span>
               <span role="columnheader">Screenshots</span>
               <span role="columnheader">Duration</span>
               <span role="columnheader">Details</span>
@@ -506,8 +514,8 @@ function renderHistory(runs: DashboardRun[]): string {
 }
 
 function renderHistoryRow(run: DashboardRun): string {
-  const statusLabel =
-    run.status === "failed" ? "Issue found" : statusLabelFor(run.status);
+  const outcome = runOutcome(run);
+  const statusLabel = outcome.label;
   return `
     <article class="history-row" role="row">
       <div class="history-run" role="cell">
@@ -517,9 +525,9 @@ function renderHistoryRow(run: DashboardRun): string {
       ${renderHistoryCell("Run time", `<time>${escapeHtml(formatTimestamp(run.startedAt))}</time>`)}
       ${renderHistoryCell(
         "Status",
-        `<span class="status-tag status-tag-${escapeHtml(run.status)}">${escapeHtml(statusLabel)}</span>`
+        `<span class="status-tag outcome-tag-${outcome.tone}">${escapeHtml(statusLabel)}</span>`
       )}
-      ${renderHistoryCell("Bugs found", `<strong>${run.issueCount}</strong>`)}
+      ${renderHistoryCell("Findings", `<strong>${run.issueCount}</strong>`)}
       ${renderHistoryCell("Screenshots", `<strong>${run.screenshotCount}</strong>`)}
       ${renderHistoryCell("Duration", `<strong>${escapeHtml(formatDuration(run.durationMs))}</strong>`)}
       <div class="history-action" role="cell">
@@ -559,9 +567,8 @@ function renderEmptyState(
         <section class="empty-state">
           <span class="empty-mark">VQ</span>
           <p class="kicker">Report dashboard</p>
-          <h1>No demo reports found</h1>
-          <p>Run the technical demo once to generate a report, trace, and browser screenshots.</p>
-          <code>npm run demo:qa</code>
+          <h1>No test runs yet</h1>
+          <a class="primary-action" href="/tests/new">New Test</a>
         </section>
       </main>
     </div>
@@ -619,9 +626,9 @@ function testRequestStatusTitle(request: UserTestRequest): string {
     return "Agent is testing the website";
   }
   if (request.status === "completed") {
-    return request.testStatus === "passed" ? "Test passed" : "Issue found";
+    return request.outcome?.label ?? "Test finished";
   }
-  return "Test could not run";
+  return request.outcome?.label ?? "Test could not run";
 }
 
 function testRequestStatusCopy(request: UserTestRequest): string {
@@ -632,11 +639,16 @@ function testRequestStatusCopy(request: UserTestRequest): string {
     return "Vibe-QA is planning actions, operating the browser, and collecting evidence.";
   }
   if (request.status === "completed") {
+    if (request.outcome) return request.outcome.summary;
     return request.testStatus === "passed"
       ? "The objective completed without a detected issue."
       : "The evaluator recorded a failure and generated a test report.";
   }
-  return request.error ?? "The test stopped before a report could be generated.";
+  return (
+    request.outcome?.summary ??
+    request.error ??
+    "The test stopped before a report could be generated."
+  );
 }
 
 function renderSteps(steps: DashboardStep[]): string {
@@ -658,6 +670,7 @@ function renderSteps(steps: DashboardStep[]): string {
                 <strong>${escapeHtml(step.name)}</strong>
                 <span>${escapeHtml(step.actionLabel)}</span>
                 ${step.reason ? `<p>${escapeHtml(step.reason)}</p>` : ""}
+                ${step.errors.length ? `<details><summary>Step details</summary><p>${step.errors.map(escapeHtml).join("<br />")}</p></details>` : ""}
               </div>
             </li>
           `
@@ -836,7 +849,7 @@ function renderScreenshots(run: DashboardRun): string {
 
 function shortRunLabel(run: DashboardRun): string {
   const date = formatTimestamp(run.startedAt);
-  const status = run.status === "failed" ? "Issue" : statusLabelFor(run.status);
+  const status = runOutcome(run).label;
   return `${date} - ${status}`;
 }
 
@@ -848,6 +861,39 @@ function statusLabelFor(status: DashboardRunStatus): string {
     return "Failed";
   }
   return "Unknown";
+}
+
+function runOutcome(run: DashboardRun): ProductOutcome {
+  return (
+    run.outcome ??
+    classifyProductOutcome({
+      status: run.status,
+      errors: run.errors,
+      bugReports: run.primaryIssue ? [run.primaryIssue] : []
+    })
+  );
+}
+
+function terminationLabel(reason: string): string {
+  const labels: Record<string, string> = {
+    "workflow-complete": "Checks completed",
+    "workflow-failed": "See outcome above",
+    "approval-required": "Stopped before a sensitive action",
+    "agent-error": "Execution interrupted",
+    STALE_ELEMENT_RECOVERY_FAILED: "Target recovery limit reached",
+    "max-steps": "Action limit reached",
+    "planner-stopped": "No next action selected",
+    "null-retry-exhausted": "Objective not confirmed",
+    "candidate-exhausted": "No safe candidates remain",
+    "goal-complete": "Completion check satisfied"
+  };
+  return labels[reason] ?? sentenceCase(reason.replaceAll("-", " "));
+}
+
+export function renderUnavailablePage(): string {
+  return renderDocument(
+    `<main class="empty-state unavailable-page"><p class="kicker">Vibe-QA</p><h1>Run unavailable</h1><p>The local report may have been moved, removed, or could not be read.</p><a class="primary-action" href="/history">History</a> <a class="secondary-action" href="/tests/new">New Test</a></main>`
+  );
 }
 
 function formatTimestamp(value: string | null): string {
@@ -919,6 +965,20 @@ function styles(): string {
       letter-spacing: 0;
     }
     * { box-sizing: border-box; }
+    h1, h2, h3, p, strong, code, summary { overflow-wrap: anywhere; }
+    .run-context { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: 20px; max-width: 1320px; margin: 0 auto 24px; padding: 16px 0; border-bottom: 1px solid #d6dde2; }
+    .run-context > div { min-width: 0; display: grid; gap: 6px; }
+    .run-context span { color: #6d7b86; font-size: 0.72rem; }
+    .run-context strong { font-size: 0.85rem; }
+    .trace-details > summary { cursor: pointer; padding: 18px 20px; color: #245fbd; font-size: 0.85rem; }
+    .diagnostic-errors { padding: 0 36px; font-size: 0.8rem; }
+    .unavailable-page { padding: 80px 20px; }
+    .status-band.outcome-attention { background: #fff9e8; border-left-color: #b17d19; }
+    .outcome-tag-attention { color: #805a15; }
+    .outcome-tag-success { color: #187056; }
+    .outcome-tag-issue { color: #b63737; }
+    .request-status-panel.outcome-attention { border-left-color: #b17d19; }
+    .status-tag { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
     html { scroll-behavior: smooth; }
     body { margin: 0; min-height: 100vh; }
     a { color: inherit; }
@@ -1306,6 +1366,7 @@ function styles(): string {
       .history-row > :nth-child(5) { display: none; }
     }
     @media (max-width: 780px) {
+      .run-context { grid-template-columns: 1fr; }
       .sidebar { height: auto; padding: 18px; position: static; width: 100%; }
       .section-nav { display: none; }
       .product-nav { grid-template-columns: repeat(4, minmax(0, 1fr)); padding-bottom: 12px; }

@@ -58,6 +58,19 @@ automatic regression selection, and production persistence remain deferred.
 
 ## Defaults and Boundaries
 
+- Release presentation lives in the dashboard adapter. `product-outcome.ts`
+  interprets existing safety/trace/errors for user-facing labels; it does not
+  replace TestEvaluator or change any planner decision. Raw reports remain intact.
+  Labels distinguish passed checks, target console/page issues, assertion failures,
+  safety blocks, approval-required stops, unsupported objectives, and agent/model/
+  browser/infrastructure errors. Unexecuted-step and runtime failures are not
+  counted as website findings or sent for target-bug analysis. Independent captured
+  console/assertion findings remain available even when execution is interrupted.
+- New Test is ordered target URL, mode, objective, final text, and optional login.
+  Functional/Regression retain an explicitly required final text check in the local
+  form; Exploratory text remains optional. Summary views show mode, target, outcome,
+  timing, findings, and evidence, with technical details expandable below.
+
 - No paid API is required. Functional/Regression never call a model by default.
 - The local form builds a deterministic page-text check. With temporary login,
   it uses live observed selectors for one username/password/sign-in form, then
@@ -148,7 +161,16 @@ router, or Adaptive V3 work is authorized by this freeze.
 
 ## Review Gate
 
-Next work is review, then separately authorized real-world validation and UI/product
-finalization. Do not start either automatically. Preserve the evaluation/reference
-capabilities; keep their policy versions, scenario IDs, confidence intervals, and
-diagnostics out of ordinary product configuration.
+Real-world Alpha acceptance and product presentation preparation are documented in
+[release readiness](ALPHA_RELEASE_READINESS.md). The execution freeze remains in
+effect. Await final release review; do not create a tag, publish a release, or begin
+another milestone automatically. Preserve evaluation/reference capabilities and
+keep research policy versions and benchmark controls out of ordinary configuration.
+
+Interactive approval UI was reviewed and deferred. A consistent implementation
+would need retained request-to-Agent ownership for both Functional and Exploratory,
+bounded consent expiry, browser/credential cleanup on abandoned requests and server
+shutdown, and authenticated request-ID handling. The existing product executor
+always closes its browser on return, and Exploratory does not use TestTask's
+callback loop. Changing those lifecycles is beyond a small presentation patch.
+The existing safe-stop and developer approval APIs remain available and tested.

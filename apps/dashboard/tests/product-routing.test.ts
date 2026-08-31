@@ -56,7 +56,7 @@ describe("product form to execution", () => {
         "Explore all available pages as a first-time user"
       );
       expect(await browser.getText("#expected-text-hint")).toContain(
-        "Optional. The agent explores autonomously"
+        "Optional. Exploratory mode autonomously navigates"
       );
       await browser.click('.test-request-form button[type="submit"]');
       expect(browser.getCurrentUrl()).toContain("/test-requests/");

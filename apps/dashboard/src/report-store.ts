@@ -19,6 +19,7 @@ import type {
   DashboardStep,
   DashboardTimelineEvent
 } from "./types.js";
+import { classifyProductOutcome } from "./product-outcome.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -76,16 +77,42 @@ export class ReportStore {
     const rawBugs = asArray(reportRecord.bugReports).map(asRecord);
     const traceSteps = asArray(traceRecord.steps).map(asRecord);
     const execution = asOptionalRecord(reportRecord.execution);
+    const configuration = asOptionalRecord(reportRecord.configuration);
     const steps = rawSteps.map(parseStep);
     const status = parseStatus(reportRecord.status);
-    const startedAt = nullableString(traceSteps[0]?.timestamp);
-    const completedAt = nullableString(traceSteps.at(-1)?.timestamp);
+    const startedAt =
+      nullableString(execution?.startedAt) ?? nullableString(traceSteps[0]?.timestamp);
+    const completedAt =
+      nullableString(execution?.completedAt) ??
+      nullableString(traceSteps.at(-1)?.timestamp);
+    const outcome = classifyProductOutcome({
+      status,
+      errors: stringArray(reportRecord.errors),
+      bugReports: rawBugs.map((bug) => ({ category: stringValue(bug.category) })),
+      execution: { terminationReason: stringValue(execution?.terminationReason) },
+      trace: {
+        steps: traceSteps.map((step) => ({
+          safetyDecision: nullableString(step.safetyDecision),
+          approvalStatus: nullableString(step.approvalStatus),
+          result: { error: nullableString(asOptionalRecord(step.result)?.error) }
+        }))
+      }
+    });
+    // Execution failures are not target-site findings. Retain independent console
+    // and assertion evidence, but never analyze synthesized unexecuted-step bugs.
+    const findings = rawBugs.filter((bug) =>
+      ["console", "content", "navigation"].includes(stringValue(bug.category))
+    );
     const primaryBug =
-      rawBugs.find((bug) => stringValue(bug.category) === "console") ??
-      rawBugs[0] ??
+      findings.find((bug) => stringValue(bug.category) === "console") ??
+      findings[0] ??
       null;
 
     return {
+      outcome,
+      targetUrl:
+        nullableString(configuration?.websiteUrl) ??
+        nullableString(asOptionalRecord(traceSteps[0]?.observation)?.url),
       ...(execution
         ? {
             execution: {
@@ -108,7 +135,7 @@ export class ReportStore {
         : durationBetween(startedAt, completedAt),
       stepCount: steps.length,
       passedStepCount: steps.filter((step) => step.status === "passed").length,
-      issueCount: rawBugs.length,
+      issueCount: findings.length,
       screenshotCount: screenshots.length,
       steps,
       timeline: parseTimeline(traceSteps, steps),

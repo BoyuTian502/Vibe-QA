@@ -25,6 +25,7 @@ import {
   AUTHENTICATION_FORM_SCRIPT,
   renderHistoryPage,
   renderTestCreationPage,
+  renderUnavailablePage,
   renderTestRequestPage
 } from "./view.js";
 
@@ -210,6 +211,10 @@ async function handleRequest(
         (selectedId ? runs.find((run) => run.id === selectedId) : null) ??
         runs[0] ??
         null;
+      if (selectedId && !runs.some((run) => run.id === selectedId)) {
+        sendHtml(response, renderUnavailablePage(), 404);
+        return;
+      }
       sendRedirect(
         response,
         selectedRun ? `/runs/${encodeURIComponent(selectedRun.id)}` : "/"
@@ -223,7 +228,7 @@ async function handleRequest(
       const runs = await store.listRuns();
       const selectedRun = runs.find((run) => run.id === runId) ?? null;
       if (!selectedRun) {
-        sendText(response, "Run not found", 404);
+        sendHtml(response, renderUnavailablePage(), 404);
         return;
       }
       sendHtml(
@@ -260,6 +265,10 @@ async function handleRequest(
     sendText(response, "Not found", 404);
   } catch (error) {
     const statusCode = isNotFoundError(error) ? 404 : 500;
+    if (request.method === "GET" && request.url?.startsWith("/runs/")) {
+      sendHtml(response, renderUnavailablePage(), statusCode);
+      return;
+    }
     sendJson(
       response,
       { error: error instanceof Error ? error.message : "Unexpected dashboard error" },
