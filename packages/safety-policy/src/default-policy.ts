@@ -70,14 +70,11 @@ export class DefaultActionSafetyPolicy implements ActionSafetyPolicy {
           reason: "Entering text does not submit the form or persist the value."
         };
       case "click":
-        return this.evaluateClick(semanticTarget, context);
+        return this.evaluateClick(semanticTarget);
     }
   }
 
-  private evaluateClick(
-    target: string,
-    context: ActionSafetyContext
-  ): ApprovalDecision {
+  private evaluateClick(target: string): ApprovalDecision {
     if (BLOCKED_ACTION_PATTERN.test(target)) {
       return {
         decision: "block",
@@ -85,7 +82,12 @@ export class DefaultActionSafetyPolicy implements ActionSafetyPolicy {
       };
     }
 
-    if (SUBMIT_PATTERN.test(target) && isLoginContext(context)) {
+    // Authentication is an exception for this control, not the whole run or page.
+    if (
+      SUBMIT_PATTERN.test(target) &&
+      LOGIN_PATTERN.test(target) &&
+      !RISKY_ACTION_PATTERN.test(target)
+    ) {
       return {
         decision: "allow",
         reason: "Submitting the local login form is an expected authentication step."
@@ -152,19 +154,17 @@ function findElement(
   selector: string,
   elements: readonly ElementInformation[]
 ): ElementInformation | undefined {
-  return elements.find((element) => element.selector === selector);
-}
-
-function isLoginContext(context: ActionSafetyContext): boolean {
-  const observation = context.observation;
-  return LOGIN_PATTERN.test(
-    [
-      context.goal,
-      observation?.url ?? "",
-      observation?.title ?? "",
-      observation?.textSample ?? ""
-    ].join(" ")
-  );
+  const exact = elements.find((element) => element.selector === selector);
+  if (exact) return exact;
+  // Existing structured login tests use a generic submit selector. Its target is
+  // unambiguous only when the live observation contains a single visible button.
+  if (/^button\[type=(?:"submit"|'submit'|submit)\]$/i.test(selector)) {
+    const buttons = elements.filter(
+      (element) => element.tagName === "button" && element.visible && element.enabled
+    );
+    if (buttons.length === 1) return buttons[0];
+  }
+  return undefined;
 }
 
 function createApprovalRequestId(): string {

@@ -344,7 +344,18 @@ class CredentialEchoBrowser implements BrowserController {
       },
       elements: [
         credentialElement("email", "email"),
-        credentialElement("password", "password")
+        credentialElement("password", "password"),
+        {
+          id: "submit",
+          tagName: "button",
+          role: "button",
+          accessibleName: "Sign in",
+          text: "Sign in",
+          visible: true,
+          enabled: true,
+          editable: false,
+          selector: 'button[type="submit"]'
+        }
       ],
       textSample: `Signed in as ${USERNAME} with ${PASSWORD}`,
       screenshotPath: null

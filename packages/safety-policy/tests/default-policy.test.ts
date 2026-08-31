@@ -54,6 +54,64 @@ describe("DefaultActionSafetyPolicy", () => {
     expect(decision.decision).toBe("allow");
   });
 
+  it.each([
+    '#settings-form button[type="submit"]',
+    '#checkout button[type="submit"]',
+    '#login-form button[type="submit"][name="purchase"]'
+  ])("does not exempt %s because the run or page mentions login", (selector) => {
+    const input = context("Test login functionality and account settings");
+    input.observation.url = "http://localhost:3000/login";
+    input.observation.title = "Sign in";
+    input.observation.textSample = "Sign in to your account";
+
+    expect(
+      new DefaultActionSafetyPolicy().evaluate({ type: "click", selector }, input)
+        .decision
+    ).toBe("require_approval");
+  });
+
+  it("allows an observed sign-in submit without a login goal", () => {
+    expect(
+      new DefaultActionSafetyPolicy().evaluate(
+        { type: "click", selector: 'button[type="submit"]' },
+        context("Verify the dashboard", "Sign in")
+      ).decision
+    ).toBe("allow");
+  });
+
+  it("does not let a login selector override the observed risky control", () => {
+    const input = context("Test login functionality", "Save settings");
+    const element = input.observation.elements[0];
+    if (!element) throw new Error("Missing test control");
+    element.selector = '#login-form button[type="submit"]';
+
+    expect(
+      new DefaultActionSafetyPolicy().evaluate(
+        { type: "click", selector: element.selector },
+        input
+      ).decision
+    ).toBe("require_approval");
+  });
+
+  it("resolves a legacy generic submit only against one live button", () => {
+    const input = context("Inspect the page", "Sign in");
+    const element = input.observation.elements[0];
+    if (!element) throw new Error("Missing test control");
+    element.selector = "#login-submit";
+    const action: BrowserAction = { type: "click", selector: 'button[type="submit"]' };
+    const policy = new DefaultActionSafetyPolicy();
+    expect(policy.evaluate(action, input).decision).toBe("allow");
+
+    input.observation.elements.push({
+      ...element,
+      id: "settings-submit",
+      selector: "#settings-submit",
+      accessibleName: "Save settings",
+      text: "Save settings"
+    });
+    expect(policy.evaluate(action, input).decision).toBe("require_approval");
+  });
+
   it("blocks actions marked forbidden by test policy", () => {
     const decision = new DefaultActionSafetyPolicy({
       forbiddenPatterns: ["production-only"]
