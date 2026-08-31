@@ -93,7 +93,29 @@ export class BrowserSession {
   }
 
   async type(selector: string, value: string): Promise<void> {
-    await this.page.locator(selector).fill(value);
+    const control = this.page.locator(selector);
+    const isSelect = await control.evaluate((element) => element.tagName === "SELECT");
+    if (isSelect) {
+      const matches = await control
+        .locator("option")
+        .evaluateAll(
+          (options, label) =>
+            options.filter(
+              (option) =>
+                option instanceof HTMLOptionElement &&
+                !option.disabled &&
+                option.label === label
+            ).length,
+          value
+        );
+      if (matches !== 1)
+        throw new Error(
+          "UNSUPPORTED_FUNCTIONAL_CONTROL: Select requires one enabled option with the exact visible label."
+        );
+      await control.selectOption({ label: value });
+      return;
+    }
+    await control.fill(value);
   }
 
   async getText(selector: string): Promise<string> {
@@ -228,6 +250,7 @@ export class BrowserSession {
             const label =
               input?.labels?.[0]?.textContent ??
               textarea?.labels?.[0]?.textContent ??
+              select?.labels?.[0]?.textContent ??
               null;
 
             return {

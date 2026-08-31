@@ -184,8 +184,8 @@ TestCase/TestRunner APIs and advanced injectable planning remain available for
 those paths. Browser execution and the safety gate remain unchanged.
 
 Functional objectives are no longer just report titles. The deterministic Alpha
-form supports a page-text check, the existing temporary-login flow, or one
-navigation interaction. For example, use **Navigate to Product Center and verify
+form supports a page-text check, the existing temporary-login flow, explicit
+native form commands, or one navigation interaction. For example, use **Navigate to Product Center and verify
 the destination page loads** with **Product Center** (or the site's exact visible
 label, such as **产品中心**) as the single-line expected text. That field names both
 the navigation control and the final text assertion; no translation or general
@@ -195,11 +195,52 @@ through the existing Agent/safety gate, requires a URL change (including hash
 routes), then checks the destination text. An unchanged homepage cannot pass.
 
 Multiple navigation targets, same-URL menus/scrolling, separate navigation labels
-and expectations, login followed by navigation, and arbitrary form submissions
+and expectations, login followed by navigation, and arbitrary prose workflows
 need an explicit structured TestCase. Unsupported or ambiguous requests fail
 clearly instead of falling back to text-only success. Simple requests such as
 **Verify that the homepage loads successfully** still use the normalized text
 check without a click. Regression and Exploratory defaults are unchanged.
+
+For a Functional form, use one command per line (or separate commands with `;`),
+with exact visible labels and dummy values. For example:
+
+```text
+Select India as Country of Residence
+Select Dr. as Title
+Enter Ada in First Name
+Enter Lovelace in Last Name
+Enter ada@example.test in Email Address
+Choose Email as Preferred Communication Method
+Click Submit
+Verify expected visible page text
+```
+
+Enter the success message in **Expected visible page text**. Supported commands
+are `Enter/Fill/Type VALUE in LABEL`, `Select OPTION as/in/from LABEL`,
+`Choose LABEL [as GROUP]`, `Check checkbox LABEL`, `Click BUTTON`, and
+`Submit [form]`. Double quotes may surround a value or label; newline/semicolon
+delimiters and the command separators must not occur inside values. The optional
+last `Verify expected visible page text` or `Verify success text` line uses the
+separate expected-text field. No instruction is silently dropped.
+
+Controls must already be present and uniquely resolvable: native inputs/textarea,
+single-select dropdowns, radio buttons, unchecked checkboxes, and buttons.
+Associated labels, `aria-label`, and nearby label/legend containers are supported,
+including Unicode labels. A date picker works only when its underlying text/date
+input accepts typing; custom dropdowns, hidden wizard steps, and already-checked
+checkbox requests fail conservatively. Secret fields must use temporary login,
+not values embedded in the objective. Unsupported commands/controls return
+`UNSUPPORTED_FUNCTIONAL_OBJECTIVE`; unavailable select options return
+`UNSUPPORTED_FUNCTIONAL_CONTROL` with a failed action trace.
+
+All form actions still use TestTask, Agent, and the safety policy. Submit and
+other risky actions require approval. By default no approval is granted: the
+report records the pending action and cannot pass. An advanced caller can supply
+an `onApproval(request)` callback to `AgentTestRequestExecutor` or `TestTask` to
+obtain an explicit operator decision; this resumes the same Agent through
+`resumeApproval`. Blocked actions never reach this callback. There is no automatic
+approval, stored consent, or new approval UI. The live QA Practice validation uses
+only dummy data and narrowly scoped authorization for that practice run.
 
 No paid API key is required for these defaults. Exploratory uses the existing
 `qwen2.5-coder:7b` Ollama client. Start Ollama and install that model before model

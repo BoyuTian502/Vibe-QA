@@ -70,7 +70,8 @@ automatic regression selection, and production persistence remain deferred.
 - Complex known paths continue to use existing structured TestCase/TestRunner
   APIs. The Alpha form does not synthesize arbitrary CRUD or multi-page workflows.
 - Functional objective handling is bounded and deterministic: page-text check,
-  temporary login, or one exact-label navigation action followed by verification.
+  temporary login, explicit native form commands, or one exact-label navigation
+  action followed by verification.
   For navigation, the single-line expected text also identifies the unique visible
   control. A successful click and URL change are required before accepting the
   final text assertion. Unsupported/ambiguous requests stop, never degrade into
@@ -78,6 +79,16 @@ automatic regression selection, and production persistence remain deferred.
   explicit structured TestCase/TestRunner APIs. The optional injected Functional
   planner is also checked for action-before-verification consistency; it is not
   enabled by default. No LLM judge, router, or browser API is added.
+- Explicit form commands map in order to existing `type` and `click` actions,
+  followed by a bounded wait and the normalized visible-text assertion. Native
+  selects reuse `type(selector, optionLabel)` through Playwright `selectOption`;
+  other inputs retain `fill`. The shared observation collector only gains native
+  select label association. There are no new BrowserAction variants or control
+  engines. Unsupported instructions/controls fail rather than being omitted.
+- TestTask and the product executor accept an optional `onApproval` callback,
+  forwarding the decision to the existing Agent approval/resume API. No handler
+  means no approval; blocked actions cannot be overridden. Agent Core and the
+  safety policy are unchanged. No persistent consent or approval UI is added.
 - Exploratory uses the existing Adaptive V2 thresholds, bounded null retry and
   completion gate, with a 12-action product budget. It can stop when safe local
   candidates are exhausted; it does not expand total budgets to improve scores.

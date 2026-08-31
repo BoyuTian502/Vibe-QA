@@ -5,7 +5,8 @@ import {
   Agent,
   type AgentTrace,
   type AgentTraceStep,
-  type BrowserController
+  type BrowserController,
+  type PendingApproval
 } from "@vibeqa/agent-core";
 import type { LLMClient } from "@vibeqa/llm";
 import type { BrowserAction, Observation } from "@vibeqa/schemas";
@@ -14,6 +15,7 @@ import { TestEvaluator } from "./test-evaluator.js";
 import type { BugReport, ExecutedTestStep, TestCase, TestResult } from "./types.js";
 
 export interface TestTaskOptions {
+  onApproval?: (request: PendingApproval) => Promise<boolean>;
   browser: BrowserController;
   testCase: TestCase;
   screenshotDirectory?: string;
@@ -23,6 +25,7 @@ export interface TestTaskOptions {
 }
 
 export class TestTask {
+  private readonly onApproval: TestTaskOptions["onApproval"];
   private readonly browser: BrowserController;
   private readonly testCase: TestCase;
   private readonly evaluator: TestEvaluator;
@@ -31,6 +34,7 @@ export class TestTask {
   private readonly maxSteps: number;
 
   constructor(options: TestTaskOptions) {
+    this.onApproval = options.onApproval;
     this.browser = options.browser;
     this.testCase = options.testCase;
     this.evaluator = options.evaluator ?? new TestEvaluator();
@@ -59,6 +63,12 @@ export class TestTask {
     try {
       await reportingBrowser.navigate(this.testCase.startUrl);
       await agent.run(this.testCase.goal);
+      let pending = agent.getPendingApproval();
+      while (pending && this.onApproval) {
+        const approved = await this.onApproval(pending);
+        await agent.resumeApproval(pending.requestId, approved === true);
+        pending = agent.getPendingApproval();
+      }
     } catch (error) {
       const message = errorMessage(error);
       return {

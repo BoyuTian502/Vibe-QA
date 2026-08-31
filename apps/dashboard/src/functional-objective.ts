@@ -1,4 +1,5 @@
 import type { TestCase, TestResult } from "@vibeqa/test-engine";
+import { parseFunctionalForm } from "./functional-form.js";
 
 const NAVIGATION = /\b(?:navigate|visit|go to|open|follow)\b|导航|跳转|打开|前往/giu;
 const CLICK = /\b(?:click|press|tap)\b|点击/giu;
@@ -11,7 +12,7 @@ const TEXT_CHECK =
 const NAVIGATION_COMMAND =
   /^(?:please )?(?:navigate|visit|go to|open|follow|click|press|tap)\b|^(?:导航|跳转|打开|前往|点击)/iu;
 const UNSUPPORTED =
-  "Unsupported deterministic Functional objective. Use a page-text check, temporary login, or one navigation target; use a structured TestCase for other workflows.";
+  "UNSUPPORTED_FUNCTIONAL_OBJECTIVE: Unsupported deterministic Functional objective. Use a page-text check, temporary login, one navigation target, or explicit form commands; use a structured TestCase for other workflows.";
 
 function intent(objective: string) {
   objective = objective.replace(/\s+/gu, " ").trim();
@@ -27,7 +28,14 @@ function intent(objective: string) {
 export function localFunctionalKind(
   objective: string,
   hasCredentials: boolean
-): "text" | "login" | "navigation" {
+): "text" | "login" | "navigation" | "form" {
+  if (parseFunctionalForm(objective)) {
+    if (hasCredentials)
+      throw new Error(
+        `${UNSUPPORTED} Login followed by form commands requires a structured TestCase.`
+      );
+    return "form";
+  }
   objective = objective.replace(/\s+/gu, " ").trim();
   const action = intent(objective);
   if (action.other || action.navigation + action.click > 1)
@@ -64,6 +72,7 @@ export function localFunctionalKind(
 
 // This is an action-consistency check, not a semantic judge of arbitrary prose.
 export function assertFunctionalPlan(objective: string, testCase: TestCase): void {
+  const form = parseFunctionalForm(objective);
   const action = intent(objective);
   const finalVerification = testCase.steps
     .map((step) => step.action.type === "assert" || step.expected !== undefined)
@@ -71,6 +80,24 @@ export function assertFunctionalPlan(objective: string, testCase: TestCase): voi
   const actions = testCase.steps
     .slice(0, finalVerification + 1)
     .map((step) => step.action);
+  if (form) {
+    const interactions = actions.filter(
+      (step) => step.type === "type" || step.type === "click"
+    );
+    if (
+      interactions.length !== form.length ||
+      form.some((instruction, index) => {
+        const step = interactions[index];
+        return instruction.kind === "fill" || instruction.kind === "select"
+          ? step?.type !== "type" || step.value !== instruction.value
+          : step?.type !== "click";
+      })
+    )
+      throw new Error(
+        "UNSUPPORTED_FUNCTIONAL_OBJECTIVE: The Functional plan must execute every explicit form instruction, in order, before final verification."
+      );
+    return;
+  }
   const interaction = actions.some((step) =>
     ["navigate", "goto", "click"].includes(step.type)
   );
@@ -94,6 +121,7 @@ export function checkFunctionalNavigationResult(
   objective: string,
   result: TestResult
 ): void {
+  if (parseFunctionalForm(objective)) return;
   if (!intent(objective).navigation || result.status !== "passed") return;
   const actions = result.trace.steps.filter((step) => step.action !== null);
   const changed = result.executedSteps.some((step, index) => {

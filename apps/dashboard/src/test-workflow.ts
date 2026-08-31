@@ -24,10 +24,12 @@ import {
   type ExecutedTestStep,
   type TestCase,
   type TestResult,
+  type TestTaskOptions,
   type TestStatus
 } from "@vibeqa/test-engine";
 
 import { alphaExecutionPolicy, type QATestMode } from "./alpha-policy.js";
+import { createFunctionalFormSteps, parseFunctionalForm } from "./functional-form.js";
 import {
   assertFunctionalPlan,
   checkFunctionalNavigationResult,
@@ -93,6 +95,7 @@ export interface UserTestWorkflowOptions {
 }
 
 export interface AgentTestRequestExecutorOptions {
+  onApproval?: TestTaskOptions["onApproval"];
   planner?: TestPlanner | null;
   explorationClient?: LLMClient;
   outputRoot: string;
@@ -227,6 +230,7 @@ export class UserTestWorkflow {
 }
 
 export class AgentTestRequestExecutor implements TestRequestExecutor {
+  private readonly onApproval: TestTaskOptions["onApproval"];
   private readonly planner: TestPlanner | null;
   private readonly explorationClient: LLMClient | undefined;
   private readonly launchBrowser: () => Promise<ClosableBrowserController>;
@@ -234,6 +238,7 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
   private readonly now: () => Date;
 
   constructor(options: AgentTestRequestExecutorOptions) {
+    this.onApproval = options.onApproval;
     this.planner = options.planner ?? null;
     this.explorationClient = options.explorationClient;
     this.launchBrowser =
@@ -278,6 +283,7 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
           : await new TestTask({
               browser: executionBrowser,
               testCase: functionalCase,
+              onApproval: this.onApproval,
               screenshotDirectory: this.artifactStore.screenshotDirectory(runId)
             }).run(),
         input.credentials
@@ -742,6 +748,15 @@ async function createLocalTestCase(
       : "text";
   if (kind === "navigation") {
     steps.push(...(await createLocalNavigationSteps(input, browser)));
+  }
+  if (kind === "form") {
+    steps.push(
+      ...(await createFunctionalFormSteps(
+        parseFunctionalForm(input.objective) ?? [],
+        browser,
+        input.websiteUrl
+      ))
+    );
   }
   if (input.credentials) {
     await browser.navigate(input.websiteUrl);
