@@ -880,6 +880,7 @@ function terminationLabel(reason: string): string {
     "workflow-failed": "See outcome above",
     "approval-required": "Stopped before a sensitive action",
     "agent-error": "Execution interrupted",
+    "page-error": "Stopped after capturing a page failure",
     STALE_ELEMENT_RECOVERY_FAILED: "Target recovery limit reached",
     "max-steps": "Action limit reached",
     "planner-stopped": "No next action selected",

@@ -16,6 +16,7 @@ evidence available for human review. It runs locally, not as a hosted QA service
 
 - Deterministic page-text, login, navigation, and explicit native-form workflows.
 - Autonomous exploration with page-state coverage and bounded target recovery.
+- Redirect-aware exploration and evidence-backed HTTP/visible not-found findings.
 - Isolated Playwright sessions and temporary credential redaction.
 - Safety decisions before actions: allow, block, or require approval.
 - Reports, screenshots, an execution timeline, local history, and optional analysis.
@@ -191,6 +192,11 @@ Alpha checks exercised external SPAs, normalized visible text, native forms, and
 QA Practice exploration. Autonomous runs can navigate real pages but do not always
 finish the objective. See [release readiness](docs/ALPHA_RELEASE_READINESS.md) for
 the final small smoke matrix, exact outcomes, and evidence references.
+
+The final [Exploratory navigation acceptance](docs/ALPHA_EXPLORATORY_NAVIGATION_ACCEPTANCE.md)
+verifies redirect handling and visible 404 findings against real QA Practice pages.
+It separates a scripted replay of the recorded destinations from the autonomous
+Ollama rerun, which still encountered the documented model-output limitation.
 
 ## Known Alpha Limitations
 

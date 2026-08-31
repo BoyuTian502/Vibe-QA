@@ -88,7 +88,10 @@ export class ReportStore {
     const outcome = classifyProductOutcome({
       status,
       errors: stringArray(reportRecord.errors),
-      bugReports: rawBugs.map((bug) => ({ category: stringValue(bug.category) })),
+      bugReports: rawBugs.map((bug) => ({
+        category: stringValue(bug.category),
+        pageError: asOptionalRecord(bug.pageError)
+      })),
       execution: { terminationReason: stringValue(execution?.terminationReason) },
       trace: {
         steps: traceSteps.map((step) => ({
@@ -213,6 +216,7 @@ function parseTimeline(
     const observation = asOptionalRecord(traceStep.observation);
     const result = asOptionalRecord(traceStep.result);
     const evaluation = asOptionalRecord(traceStep.evaluation);
+    const pageError = asOptionalRecord(traceStep.pageError);
     const matchingStep = action && !recovery ? reportSteps[actionIndex] : undefined;
     if (action && !recovery) {
       actionIndex += 1;
@@ -223,7 +227,7 @@ function parseTimeline(
     const status =
       approvalStatus === "pending"
         ? "pending"
-        : !success || matchingStep?.status === "failed"
+        : !success || pageError || matchingStep?.status === "failed"
           ? "failed"
           : "passed";
     return {
@@ -239,7 +243,7 @@ function parseTimeline(
             ? "Capture the starting page"
             : "Observe the page after the action",
       status,
-      detail: nullableString(evaluation?.reason),
+      detail: nullableString(pageError?.message) ?? nullableString(evaluation?.reason),
       error: nullableString(result?.error),
       safetyDecision: nullableString(traceStep.safetyDecision),
       approvalStatus,

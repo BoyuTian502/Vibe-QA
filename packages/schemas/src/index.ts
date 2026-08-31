@@ -6,6 +6,7 @@ export {
   ConsoleErrorSchema,
   ElementInformationSchema,
   ObservationSchema,
+  NavigationMetadataSchema,
   PageMetadataSchema
 } from "./browser.js";
 export type {
@@ -14,6 +15,7 @@ export type {
   ConsoleError,
   ElementInformation,
   Observation,
+  NavigationMetadata,
   PageMetadata
 } from "./browser.js";
 export {

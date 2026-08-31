@@ -26,6 +26,15 @@ export const ConsoleErrorSchema = z.object({
     .nullable()
 });
 
+export const NavigationMetadataSchema = z.object({
+  requestedUrl: z.string().url(),
+  finalUrl: z.string().url(),
+  completed: z.boolean(),
+  redirected: z.boolean(),
+  responseStatus: z.number().int().min(100).max(599).nullable(),
+  redirectChain: z.array(z.string().url())
+});
+
 export const PageMetadataSchema = z.object({
   url: z.string().url(),
   title: z.string(),
@@ -34,7 +43,8 @@ export const PageMetadataSchema = z.object({
       width: z.number().int().positive(),
       height: z.number().int().positive()
     })
-    .nullable()
+    .nullable(),
+  navigation: NavigationMetadataSchema.optional()
 });
 
 export const AccessibilityHeadingSchema = z.object({
@@ -109,6 +119,7 @@ export const BrowserActionSchema = z.discriminatedUnion("type", [
 export type ConsoleError = z.infer<typeof ConsoleErrorSchema>;
 export type ElementInformation = z.infer<typeof ElementInformationSchema>;
 export type PageMetadata = z.infer<typeof PageMetadataSchema>;
+export type NavigationMetadata = z.infer<typeof NavigationMetadataSchema>;
 export type AccessibilityInfo = z.infer<typeof AccessibilityInfoSchema>;
 export type Observation = z.infer<typeof ObservationSchema>;
 export type BrowserAction = z.infer<typeof BrowserActionSchema>;

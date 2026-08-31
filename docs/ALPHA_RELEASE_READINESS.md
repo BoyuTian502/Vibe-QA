@@ -4,6 +4,11 @@ Date: 2026-08-31. Scope: UI polish and release preparation for `v0.1.0-alpha`.
 No release/tag was created, package versions were not changed, and no planner,
 Agent, safety, browser, or benchmark architecture was changed.
 
+Follow-up: the two navigation/detection defects recorded below were addressed in
+[Exploratory navigation acceptance](ALPHA_EXPLORATORY_NAVIGATION_ACCEPTANCE.md).
+This document preserves the original UI-polish measurements; it is not a rerun
+or an updated claim of autonomous success.
+
 ## Review Decision
 
 Ready for final human review with the limitations below, not a claim that all

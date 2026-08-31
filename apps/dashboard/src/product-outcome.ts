@@ -22,7 +22,7 @@ export interface ProductOutcome {
 interface OutcomeEvidence {
   status: string;
   errors?: readonly string[];
-  bugReports?: ReadonlyArray<{ category?: string }>;
+  bugReports?: ReadonlyArray<{ category?: string; pageError?: unknown }>;
   trace?: {
     steps: ReadonlyArray<{
       safetyDecision?: string | null;
@@ -40,7 +40,7 @@ const copy: Record<ProductOutcomeKind, [string, string]> = {
   ],
   TARGET_ISSUE: [
     "Issue found",
-    "A page or console error was captured on the target website. Review the evidence before confirming a bug."
+    "A page failure or console error was captured on the target website. Review the evidence and navigation path before confirming a bug."
   ],
   TEST_ASSERTION_FAILURE: [
     "Expected result not met",
@@ -133,7 +133,7 @@ export function classifyProductOutcome(input: OutcomeEvidence): ProductOutcome {
     has(/^Exploration stopped without confirming/)
   )
     kind = "AGENT_ERROR";
-  else if (input.bugReports?.some((bug) => bug.category === "console"))
+  else if (input.bugReports?.some((bug) => bug.category === "console" || bug.pageError))
     kind = "TARGET_ISSUE";
   else if (
     input.bugReports?.some(

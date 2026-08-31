@@ -3,14 +3,21 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type Page,
+  type Request
+} from "playwright";
 import {
   type AccessibilityInfo,
   type ConsoleError,
   ElementInformationSchema,
   ObservationSchema,
   type ElementInformation,
-  type Observation
+  type Observation,
+  type NavigationMetadata
 } from "@vibeqa/schemas";
 
 export interface BrowserSessionOptions {
@@ -31,6 +38,8 @@ export class BrowserSession {
   private readonly consoleErrors: ConsoleError[];
   private readonly sensitiveSelectors = new Set<string>();
   private readonly sensitiveValues = new Set<string>();
+  private navigation: NavigationMetadata | null = null;
+  private documentResponse: { url: string; status: number } | null = null;
 
   private constructor(
     private readonly browser: Browser,
@@ -39,6 +48,26 @@ export class BrowserSession {
     consoleErrors: ConsoleError[]
   ) {
     this.consoleErrors = consoleErrors;
+    page.on("response", (response) => {
+      const request = response.request();
+      // Only top-level documents, never images, API calls, or iframe responses.
+      if (!request.isNavigationRequest() || request.frame() !== page.mainFrame())
+        return;
+      if (response.status() >= 300 && response.status() < 400) return;
+      const redirectChain: string[] = [];
+      for (let hop: Request | null = request; hop; hop = hop.redirectedFrom()) {
+        redirectChain.unshift(hop.url());
+      }
+      this.documentResponse = { url: response.url(), status: response.status() };
+      this.navigation = {
+        requestedUrl: redirectChain[0] ?? response.url(),
+        finalUrl: response.url(),
+        completed: true,
+        redirected: redirectChain.length > 1,
+        responseStatus: response.status(),
+        redirectChain
+      };
+    });
   }
 
   static async launch(options: BrowserSessionOptions = {}): Promise<BrowserSession> {
@@ -81,7 +110,21 @@ export class BrowserSession {
   }
 
   async goto(url: string): Promise<void> {
-    await this.page.goto(url, { waitUntil: "domcontentloaded" });
+    this.navigation = null;
+    this.documentResponse = null;
+    try {
+      await this.page.goto(url, { waitUntil: "domcontentloaded" });
+      this.navigation = {
+        ...this.navigationEvidence(),
+        requestedUrl: url,
+        completed: true,
+        redirected: url !== this.page.url()
+      };
+    } catch (error) {
+      this.navigation = null;
+      this.documentResponse = null;
+      throw error;
+    }
   }
 
   async navigate(url: string): Promise<void> {
@@ -89,7 +132,19 @@ export class BrowserSession {
   }
 
   async click(selector: string): Promise<void> {
+    const before = this.page.url();
     await this.page.locator(selector).click();
+    if (this.page.url() !== before && this.navigation?.finalUrl !== this.page.url()) {
+      // A same-document SPA click has no new HTTP response.
+      this.navigation = {
+        requestedUrl: this.page.url(),
+        finalUrl: this.page.url(),
+        completed: true,
+        redirected: false,
+        responseStatus: null,
+        redirectChain: []
+      };
+    }
   }
 
   async type(selector: string, value: string): Promise<void> {
@@ -189,7 +244,8 @@ export class BrowserSession {
       metadata: {
         url,
         title,
-        viewport: this.page.viewportSize()
+        viewport: this.page.viewportSize(),
+        ...(this.navigation ? { navigation: this.navigationEvidence() } : {})
       },
       consoleErrors: this.consoleErrors,
       accessibility,
@@ -204,6 +260,24 @@ export class BrowserSession {
     this.sensitiveValues.clear();
     await this.context.close();
     await this.browser.close();
+  }
+
+  private navigationEvidence(): NavigationMetadata {
+    const finalUrl = this.page.url();
+    const requestedUrl = this.navigation?.requestedUrl ?? finalUrl;
+    return {
+      requestedUrl,
+      finalUrl,
+      completed: true,
+      redirected: requestedUrl !== finalUrl,
+      // Do not carry an old document's status into a different SPA route.
+      responseStatus:
+        this.documentResponse &&
+        withoutHash(this.documentResponse.url) === withoutHash(finalUrl)
+          ? this.documentResponse.status
+          : null,
+      redirectChain: [...(this.navigation?.redirectChain ?? [])]
+    };
   }
 
   private screenshotMasks() {
@@ -283,6 +357,11 @@ export class BrowserSession {
   ): Promise<AccessibilityInfo> {
     return await this.page.evaluate((count) => {
       const headings = Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6"))
+        .filter(
+          (heading) =>
+            heading.getClientRects().length > 0 &&
+            getComputedStyle(heading).visibility !== "hidden"
+        )
         .map((heading) => ({
           level: Number(heading.tagName.slice(1)),
           text: (heading.textContent ?? "").trim()
@@ -338,6 +417,12 @@ export class BrowserSession {
       }
     }, interactiveElementCount);
   }
+}
+
+function withoutHash(value: string): string {
+  const url = new URL(value);
+  url.hash = "";
+  return url.href;
 }
 
 function findSystemChromiumExecutable(): string | undefined {

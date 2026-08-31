@@ -66,6 +66,13 @@ automatic regression selection, and production persistence remain deferred.
   browser/infrastructure errors. Unexecuted-step and runtime failures are not
   counted as website findings or sent for target-bug analysis. Independent captured
   console/assertion findings remain available even when execution is interrupted.
+- Product Exploratory uses the existing Agent evaluator injection point for
+  redirect-aware navigation and clear page-error detection. Optional observation
+  navigation metadata records requested/final URLs, main-document HTTP status, and
+  the observed HTTP redirect chain. Functional/Regression URL expectations remain
+  strict. A confirmed page-error signal records evidence and ends exploration with
+  `page-error`, not `agent-error`. No Adaptive or Agent Core strategy changes are
+  involved. See [navigation acceptance](ALPHA_EXPLORATORY_NAVIGATION_ACCEPTANCE.md).
 - New Test is ordered target URL, mode, objective, final text, and optional login.
   Functional/Regression retain an explicitly required final text check in the local
   form; Exploratory text remains optional. Summary views show mode, target, outcome,

@@ -1,4 +1,9 @@
 import type { TestResult } from "@vibeqa/test-engine";
+import type { AgentTraceStep } from "@vibeqa/agent-core";
+import type {
+  ExplorationEvaluationResult,
+  PageErrorFinding
+} from "./exploration-evaluator.js";
 
 import type { QATestMode } from "./alpha-policy.js";
 
@@ -28,6 +33,17 @@ export interface ProductExecution {
 }
 
 export interface ProductTestResult extends TestResult {
+  bugReports: Array<
+    TestResult["bugReports"][number] & { pageError?: PageErrorFinding }
+  >;
   execution?: ProductExecution;
-  trace: TestResult["trace"] & { execution?: ProductExecution };
+  trace: TestResult["trace"] & {
+    execution?: ProductExecution;
+    steps: Array<
+      AgentTraceStep & {
+        pageError?: PageErrorFinding;
+        evaluation?: ExplorationEvaluationResult;
+      }
+    >;
+  };
 }

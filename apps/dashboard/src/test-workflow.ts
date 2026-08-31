@@ -24,7 +24,6 @@ import {
 import {
   TestTask,
   TestEvaluator,
-  type BugReport,
   type ExecutedTestStep,
   type TestCase,
   type TestResult,
@@ -35,6 +34,7 @@ import {
 import { alphaExecutionPolicy, type QATestMode } from "./alpha-policy.js";
 import type { ProductTestResult } from "./product-execution.js";
 import { classifyProductOutcome, type ProductOutcome } from "./product-outcome.js";
+import { detectPageError, ExplorationEvaluator } from "./exploration-evaluator.js";
 import { createFunctionalFormSteps, parseFunctionalForm } from "./functional-form.js";
 import {
   assertFunctionalPlan,
@@ -474,7 +474,14 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
     });
     const agent: Agent = new Agent({
       browser: evidenceBrowser,
-      llmClient: controller,
+      llmClient: {
+        generate: async (prompt) =>
+          agent.state.currentObservation &&
+          detectPageError(agent.state.currentObservation)
+            ? "null"
+            : controller.generate(prompt)
+      },
+      evaluator: new ExplorationEvaluator(),
       recoverElementActions: true,
       maxSteps: 12,
       safetyPolicy: {
@@ -518,6 +525,7 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
     if (
       input.expectedBehavior.trim() &&
       agent.state.currentObservation &&
+      !detectPageError(agent.state.currentObservation) &&
       !agent.getPendingApproval()
     ) {
       const assertionAgent = new Agent({
@@ -563,18 +571,20 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
       modelInvocationCount: metadata.ollamaInvocationCount,
       terminationReason: agent.getPendingApproval()
         ? "approval-required"
-        : agent.state.errors.some((error) =>
-              error.startsWith("STALE_ELEMENT_RECOVERY_FAILED")
-            )
-          ? "STALE_ELEMENT_RECOVERY_FAILED"
-          : agent.state.errors.length
-            ? "agent-error"
-            : agent.state.stepCount >= 12
-              ? "max-steps"
-              : metadata.postHandoffTerminationReason &&
-                  metadata.postHandoffTerminationReason !== "none"
-                ? metadata.postHandoffTerminationReason
-                : "planner-stopped",
+        : result.bugReports.some((bug) => bug.pageError)
+          ? "page-error"
+          : agent.state.errors.some((error) =>
+                error.startsWith("STALE_ELEMENT_RECOVERY_FAILED")
+              )
+            ? "STALE_ELEMENT_RECOVERY_FAILED"
+            : agent.state.errors.length
+              ? "agent-error"
+              : agent.state.stepCount >= 12
+                ? "max-steps"
+                : metadata.postHandoffTerminationReason &&
+                    metadata.postHandoffTerminationReason !== "none"
+                  ? metadata.postHandoffTerminationReason
+                  : "planner-stopped",
       startedAt: "",
       completedAt: "",
       durationMs: 0,
@@ -771,6 +781,7 @@ class EvidenceBrowserController implements BrowserController {
 }
 
 function isLoadingObservation(observation: Observation): boolean {
+  if (detectPageError(observation)) return false;
   const text = observation.textSample.replace(/\s+/gu, " ").trim();
   return (
     !text || /^(?:loading|please wait|loading please wait)[\s.!\u2026]*$/i.test(text)
@@ -1084,11 +1095,11 @@ function explorationToTestResult(
   lifecycleErrors: string[],
   expectedText?: string,
   visiblePageText?: string
-): TestResult {
-  const trace = agent.getTrace();
+): ProductTestResult {
+  const trace: ProductTestResult["trace"] = agent.getTrace();
   const evaluator = new TestEvaluator();
   const executedSteps: ExecutedTestStep[] = [];
-  const bugReports: BugReport[] = [];
+  const bugReports: ProductTestResult["bugReports"] = [];
   for (const [traceIndex, step] of trace.steps.entries()) {
     // Locator recovery is an Agent event, not evidence of a website defect.
     // Preserve it in the trace without counting it as an executed browser action.
@@ -1122,6 +1133,51 @@ function explorationToTestResult(
       errors: evaluation.errors
     });
   }
+  const seenPageErrors = new Set<string>();
+  const path: BrowserAction[] = [];
+  let actionIndex = -1;
+  for (const step of trace.steps) {
+    if (step.observation) {
+      const signal = detectPageError(step.observation);
+      const key = signal ? `${signal.url}|${signal.source}|${signal.statusCode}` : "";
+      if (signal && !seenPageErrors.has(key)) {
+        seenPageErrors.add(key);
+        const pageError = {
+          ...signal,
+          screenshot: step.observation.screenshotPath,
+          action: path.at(-1) ?? null,
+          path: [...path],
+          severity: step.observation.consoleErrors.length
+            ? ("high" as const)
+            : ("medium" as const)
+        };
+        step.pageError = pageError;
+        bugReports.push({
+          title:
+            signal.source === "http-status"
+              ? `HTTP ${signal.statusCode} page failure`
+              : "Page not found",
+          description: `${signal.message} Page title: ${signal.title || "(untitled)"}. Review the recorded navigation path before confirming a site defect.`,
+          category: "navigation",
+          stepIndex: actionIndex,
+          stepName:
+            actionIndex < 0
+              ? "Capture the starting page"
+              : `Explore with ${path.at(-1)?.type}`,
+          evidence: {
+            url: signal.url,
+            consoleErrors: step.observation.consoleErrors,
+            screenshot: step.observation.screenshotPath
+          },
+          pageError
+        });
+      }
+    }
+    if (step.action && !step.elementRecovery) {
+      actionIndex += 1;
+      if (step.result.success) path.push(step.action);
+    }
+  }
   if (agent.getPendingApproval()) {
     lifecycleErrors.push(
       "Exploration stopped because an action requires human approval. No risky action was executed."
@@ -1133,7 +1189,8 @@ function explorationToTestResult(
     ...trace.steps.flatMap(
       (step) => step.observation?.consoleErrors.map((error) => error.text) ?? []
     ),
-    ...lifecycleErrors
+    ...lifecycleErrors,
+    ...bugReports.flatMap((bug) => (bug.pageError ? [bug.pageError.message] : []))
   ]);
 
   if (bugReports.length === 0 && errors.length > 0) {

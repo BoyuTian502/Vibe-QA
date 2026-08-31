@@ -10,6 +10,8 @@ unchanged.
   text, login, exact-label navigation, and explicit native-form commands.
 - Adaptive V2 Exploratory execution, with local Ollama escalation, state coverage,
   and bounded recovery from invalid model-selected targets.
+- Redirect-aware product exploration and automatic main-document HTTP 404/5xx or
+  conservative visible page-not-found findings, with screenshots and navigation paths.
 - Real Playwright browser sessions, temporary authentication, credential
   redaction, screenshots, trace, and structured evidence.
 - Deterministic safety policy: allow, block, and require approval. Core callback
