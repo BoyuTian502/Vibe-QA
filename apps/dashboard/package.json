@@ -12,11 +12,13 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@vibeqa/adaptive-execution": "0.0.0",
     "@vibeqa/agent-core": "0.0.0",
     "@vibeqa/browser-playwright": "0.0.0",
     "@vibeqa/explorer": "0.0.0",
     "@vibeqa/llm": "0.0.0",
     "@vibeqa/planner": "0.0.0",
+    "@vibeqa/safety-policy": "0.0.0",
     "@vibeqa/schemas": "0.0.0",
     "@vibeqa/test-engine": "0.0.0"
   },

@@ -22,6 +22,45 @@ const USERNAME = "temporary.qa@example.test";
 const PASSWORD = "temporary-password-8291";
 
 describe("secure authenticated testing", () => {
+  it("runs the Alpha local login default without a model and keeps credentials temporary", async () => {
+    const benchmark = await startBenchmarkServer({ port: 0 });
+    const artifacts = new SecurityArtifactStore();
+    const credentials = new TemporaryLoginCredentials("qa@example.com", "password123");
+    let modelCalls = 0;
+    const executor = new AgentTestRequestExecutor({
+      outputRoot: "unused",
+      artifactStore: artifacts,
+      explorationClient: {
+        generate: async () => {
+          modelCalls += 1;
+          throw new Error("Unexpected model call");
+        }
+      }
+    });
+    try {
+      await expect(
+        executor.execute(
+          {
+            websiteUrl: `${benchmark.url}/login`,
+            objective: "Test login functionality",
+            expectedBehavior: "PRIVATE DASHBOARD",
+            mode: "functional",
+            credentials
+          },
+          "alpha-local-login"
+        )
+      ).resolves.toMatchObject({ status: "passed" });
+      expect(modelCalls).toBe(0);
+      expect(credentials.cleared).toBe(true);
+      expect(artifacts.saved?.executedSteps).toHaveLength(5);
+      expect(JSON.stringify(artifacts.saved)).not.toMatch(
+        /qa@example\.com|password123/
+      );
+    } finally {
+      await benchmark.close();
+    }
+  });
+
   it("injects credentials only at the browser boundary and redacts all artifacts", async () => {
     const credentials = new TemporaryLoginCredentials(USERNAME, PASSWORD);
     const browser = new CredentialEchoBrowser();

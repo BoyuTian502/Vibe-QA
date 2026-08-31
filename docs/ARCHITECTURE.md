@@ -1,5 +1,9 @@
 # VibeQA Architecture
 
+> Historical design proposal. For the implemented v0.1.0-alpha execution freeze,
+> see [Alpha Architecture](ALPHA_ARCHITECTURE.md). In particular, LangGraph below
+> is deferred and is not a dependency of the current execution architecture.
+
 ## 1. Architectural principle
 
 VibeQA should not be implemented as a group of loosely coordinated conversational agents.

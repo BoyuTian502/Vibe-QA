@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +22,7 @@ import {
 import { TemporaryLoginCredentials } from "./secure-credentials.js";
 import {
   renderDashboardPage,
+  AUTHENTICATION_FORM_SCRIPT,
   renderHistoryPage,
   renderTestCreationPage,
   renderTestRequestPage
@@ -41,6 +43,9 @@ export interface DashboardServer {
 }
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
+const authenticationScriptHash = createHash("sha256")
+  .update(AUTHENTICATION_FORM_SCRIPT)
+  .digest("base64");
 
 export async function startDashboardServer(
   options: DashboardServerOptions = {}
@@ -53,8 +58,7 @@ export async function startDashboardServer(
       ? createAnalysisClientFromEnvironment()
       : options.llmClient;
   const analysisService = new BugAnalysisService(llmClient);
-  const testWorkflow =
-    options.testWorkflow ?? createUserTestWorkflow(llmClient, outputRoot);
+  const testWorkflow = options.testWorkflow ?? createUserTestWorkflow(null, outputRoot);
   const server = createServer((request, response) => {
     void handleRequest(request, response, store, analysisService, testWorkflow);
   });
@@ -274,8 +278,7 @@ function sendHtml(response: ServerResponse, html: string, statusCode = 200): voi
   response.writeHead(statusCode, {
     "content-type": "text/html; charset=utf-8",
     "cache-control": "no-store",
-    "content-security-policy":
-      "default-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'",
+    "content-security-policy": `default-src 'self'; script-src 'sha256-${authenticationScriptHash}'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'`,
     "x-content-type-options": "nosniff"
   });
   response.end(html);

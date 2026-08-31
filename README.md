@@ -5,9 +5,10 @@ evaluates what happened after each action, and produces evidence-backed bug
 reports. It is built for indie developers and small teams that need useful QA
 coverage without maintaining a large end-to-end test suite.
 
-The current Alpha-0 prototype combines deterministic functional testing,
-LLM-ready planning, bounded autonomous exploration, human approval for risky
-actions, and a resettable SaaS-style benchmark with five seeded defects.
+The execution architecture is frozen for **v0.1.0-alpha**: deterministic Functional
+and Regression testing, Adaptive V2 Exploratory testing, human approval for risky
+actions, and local browser evidence. Real-world validation and UI/product
+finalization are the next review-gated activities, not another planner milestone.
 
 ## Problem
 
@@ -35,8 +36,8 @@ Vibe-QA provides:
   `BugReport` output.
 - An exploration engine that fingerprints page states, generates and ranks
   candidates, tracks coverage, and avoids repeated actions.
-- A read-only report dashboard for test status, findings, execution traces, and
-  browser evidence.
+- A local test-creation and history dashboard with read-only views of findings,
+  execution traces, and browser evidence.
 - An abstract planning and LLM layer with mock, OpenAI-compatible, and Ollama
   clients, without coupling the agent to one provider.
 
@@ -46,15 +47,16 @@ platform, and the portfolio demo does not require an API key or paid model.
 ## Architecture
 
 ```mermaid
-flowchart LR
-    Goal["Test request"] --> Planner["Planner<br/>deterministic or LLM-backed"]
-    Planner --> Case["Structured TestCase"]
-    Case --> Engine["Test Engine"]
-    ExploreGoal["Exploration goal"] --> Explorer["Explorer<br/>state coverage + candidate ranking"]
-    Engine --> Agent["Agent Core<br/>Observe -> Think -> Act -> Reflect"]
-    Explorer --> Agent
-    LLM["LLMClient abstraction<br/>Mock / OpenAI-compatible / Ollama"] -.-> Planner
-    LLM -.-> Agent
+flowchart TD
+    User --> Configuration["Target / objective / expected behavior"]
+    Configuration --> Mode{"Testing mode"}
+    Mode -->|Functional| Engine["Deterministic Test Engine"]
+    Mode -->|Regression| Engine
+    Mode -->|Exploratory| Adaptive["Adaptive V2 + Explorer candidates"]
+    Adaptive -->|Escalation only| LLM["Local Ollama through LLMClient"]
+    LLM --> Adaptive
+    Engine --> Agent["Agent Core"]
+    Adaptive --> Agent
     Agent --> Safety{"Safety Policy"}
     Safety -->|allow| Browser["Playwright BrowserController"]
     Safety -->|require approval| Approval["Pause and resume"]
@@ -69,9 +71,23 @@ flowchart LR
     Evidence --> Dashboard["AI QA Report Dashboard"]
 ```
 
-All browser operations use typed `BrowserAction` values. The safety gate runs
-before execution, and observations flow back through the evaluator and trace so
-the final result can be inspected rather than taken on trust.
+Browser actions use the existing typed contracts and safety gate. The dashboard
+selects the strategy automatically; normal users choose only **Functional**,
+**Regression**, or **Exploratory**. The core approval API preserves paused state;
+the dashboard currently stops and closes an approval-required run without
+executing the risky action, rather than offering a resume UI.
+
+See the [frozen Alpha architecture](docs/ALPHA_ARCHITECTURE.md) for CORE, PRODUCT,
+EVALUATION, EXPERIMENTAL, and DEFERRED boundaries. Earlier design proposals are
+historical; no LangGraph or replacement agent framework is part of this Alpha.
+
+Deterministic execution preserves speed and reproducibility on known workflows.
+Adaptive V2 preserves opportunity for exploratory work: the completed 240-run
+comparison measured 71.7% expected-outcome success and 35% hidden discovery, with
+100% opportunity retained at handoff. Controlled checks stayed 8/8 successful
+with zero escalation. This is a quality choice, not a latency claim: generalization
+averaged 10.99s for Adaptive versus 6.45s for Ollama, with unnecessary escalations
+and unresolved session-protection failures still present.
 
 | Area | Existing implementation |
 | --- | --- |
@@ -79,7 +95,7 @@ the final result can be inspected rather than taken on trust.
 | Agent runtime | `agent-core`, including memory, evaluator, trace, and approvals |
 | Planning and models | `planner`, `llm` |
 | Functional execution | `test-engine`, `test-runner` |
-| Autonomous exploration | `explorer` |
+| Autonomous exploration | `explorer`, `adaptive-execution` (V2) |
 | Safety and contracts | `safety-policy`, `schemas` |
 | Local product under test | `apps/benchmark-app` |
 | Demo and CLI | `apps/cli` |
@@ -144,16 +160,32 @@ Start the dashboard and open **New Test**. Choose a testing mode, then provide
 the target page, a concise objective such as `Test login functionality`, and the
 expected behavior.
 
-- **Functional** creates an assertion-backed `TestCase` for a specific workflow.
-- **Exploratory** uses the existing coverage engine to discover and exercise
-  safe interactive states without requiring an API key.
-- **Regression** creates an expectation-driven plan that checks whether known
-  behavior still holds. Cross-run Website Memory remains a future capability.
+- **Functional** runs a deterministic local `TestCase` and verifies expected page
+  text. No model is called.
+- **Regression** repeats the same deterministic expectation check. Cross-run
+  Website Memory and automatic regression selection remain deferred.
+- **Exploratory** uses Adaptive V2 with existing Explorer candidates and Agent
+  execution. Ollama is called only when Adaptive escalates; unavailable models
+  or unresolved completion are reported honestly, not as a silent success.
 
-Functional and regression planning require `OPENAI_API_KEY`. All three modes
-execute through the existing Agent and safety policy; functional and regression
-use the Test Engine, while exploratory mode uses the existing
-`ExplorationSession`. Browser execution remains local through Playwright.
+For Functional/Regression, enter literal, case-sensitive text such as `Dashboard`
+in **Expected behavior / page text**. Without temporary login, the local form
+checks the submitted page. With temporary login, it supports a single observed
+username/password/sign-in form and checks the resulting page. It does not infer
+arbitrary multi-page or CRUD workflows from prose; existing structured
+TestCase/TestRunner APIs and advanced injectable planning remain available for
+those paths. Browser execution and the safety gate remain unchanged.
+
+No paid API key is required for these defaults. Exploratory uses the existing
+`qwen2.5-coder:7b` Ollama client. Start Ollama and install that model before model
+escalation is needed. Its IPv4-safe endpoint can be configured with:
+
+```ini
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+```
+
+Optional `OPENAI_API_KEY` enables report analysis only; it does not switch the
+normal test workflow to paid planning.
 
 For login-required sites, enable **Temporary login** and enter a username and
 password. Credentials remain in memory only for that run: the planner sees
@@ -188,7 +220,15 @@ The strict TypeScript monorepo contains focused unit and browser integration tes
 for the benchmark, browser controllers, agent runtime, safety gate, planner, test
 engine, runner, explorer, and demo composition.
 
-## Evaluation Benchmark V2
+## Evaluation Reference
+
+The following research and debug capabilities are retained for maintainers.
+They are not normal product configuration and do not change the Alpha mode policy.
+
+<details>
+<summary>Benchmark strategies, historical comparisons, and diagnostics</summary>
+
+### Evaluation Benchmark V2
 
 Individual test reports show what happened in one run. The evaluation benchmark
 repeats a representative suite against the seeded benchmark application to
@@ -486,6 +526,8 @@ alongside explicit limitations. It is a controlled-site evaluation, not a claim
 of universal website-testing accuracy, and Ollama results can vary by model and
 environment.
 
+</details>
+
 ## Repository Map
 
 ```text
@@ -493,7 +535,7 @@ apps/
   benchmark-app/       Resettable SaaS-style target with five seeded bugs
   benchmark-runner/    Comparative repeated evaluation CLI
   cli/                 CLI and visible technical demo
-  dashboard/           Read-only report and evidence dashboard
+  dashboard/           Test creation, history, and report/evidence dashboard
   worker/              Worker application boundary
 packages/
   adaptive-execution/ Runtime progress monitoring and one-way escalation
@@ -524,11 +566,14 @@ docs/                  Product, architecture, agent, scope, and demo documents
 
 ## Project Status
 
-Vibe-QA is an Alpha-0 engineering prototype. The implemented foundation proves a
-local, explainable, safety-aware browser testing loop against a controlled
-benchmark. Production persistence, cloud execution, a hosted UI, and multi-browser
-support remain outside the current scope.
+Vibe-QA's execution architecture is frozen for v0.1.0-alpha. Package versions
+remain unchanged until release packaging. The implemented foundation proves a
+local, explainable, safety-aware browser loop against a controlled benchmark;
+it is not yet validated across arbitrary production websites. New planners,
+routers, frameworks, cloud execution, and multi-browser support are deferred.
+Real-world validation and UI/product finalization require the next review.
 
-For deeper design context, see [Architecture](docs/ARCHITECTURE.md),
+For the current decision, see [Alpha Architecture](docs/ALPHA_ARCHITECTURE.md).
+For historical design context, see [Architecture](docs/ARCHITECTURE.md),
 [Agent Design](docs/AGENT_DESIGN.md), [MVP Scope](docs/MVP_SCOPE.md), and the
 [Implementation Plan](docs/IMPLEMENTATION_PLAN.md).

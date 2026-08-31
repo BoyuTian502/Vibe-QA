@@ -1,0 +1,130 @@
+# Vibe-QA v0.1.0-alpha Architecture Freeze
+
+Status: frozen for Alpha product finalization. This document describes the
+implemented execution architecture and takes precedence over earlier design
+proposals. It is not a new planner milestone or a package-version release.
+
+## Execution Policy
+
+| Product mode | Internal default | Priority |
+| --- | --- | --- |
+| Functional | Deterministic Test Engine | Reliable, reproducible known-path checks |
+| Regression | Deterministic Test Engine | Repeated expectation checks with low latency |
+| Exploratory | Adaptive V2, then local Ollama only on escalation | Preserve live exploration opportunity |
+
+`apps/dashboard/src/alpha-policy.ts` is the product mapping. The normal form has
+only these three modes, a target page, objective, expected behavior, and optional
+temporary login. It has no model, router, benchmark, or policy-version selector.
+The analysis client is independent of execution: configuring paid bug analysis
+does not change test strategy.
+
+```mermaid
+flowchart TD
+    User --> Config["Test configuration"]
+    Config --> Mode{"Product mode"}
+    Mode -->|Functional| Deterministic["Deterministic Test Engine"]
+    Mode -->|Regression| Deterministic
+    Mode -->|Exploratory| Adaptive["Adaptive V2 + Explorer candidates"]
+    Adaptive -->|Escalation only| Ollama["Existing Ollama LLMClient"]
+    Ollama --> Adaptive
+    Deterministic --> Agent["Existing Agent"]
+    Adaptive --> Agent
+    Agent --> Safety["Safety Policy"]
+    Safety -->|Allow| Browser["Isolated Playwright BrowserController"]
+    Safety -->|Block or approval required| Stop["Record and stop product run"]
+    Browser <--> Website["Target website"]
+    Browser --> Evidence["Observation / Trace / Evidence / Report"]
+    Evidence --> Dashboard["Dashboard / History / Run Details"]
+```
+
+No Agent, Explorer, Planner, browser, safety, LLM, or Test Engine API was
+redesigned for the freeze. Dashboard composition reuses the existing Adaptive
+controller and Agent, Explorer candidate generation/fingerprints, and Test
+Evaluator. Benchmark execution remains independent of the product mapping.
+
+## Module Classification
+
+| Category | Modules and responsibilities |
+| --- | --- |
+| CORE | `agent-core` (Agent/AgentLoop, Memory, state, Evaluator, trace, approvals); Planner and TestPlanner interfaces; `browser-tools` / `browser-playwright` (BrowserController and isolated sessions); `test-engine`; `test-runner`; `explorer`; Adaptive V2 in `adaptive-execution`; `safety-policy`; `schemas`; `llm` abstraction and provider clients; secure temporary-credential/browser boundary currently housed in the dashboard |
+| PRODUCT | `apps/cli`, technical demo, `apps/dashboard`, test creation and mode mapping, run history, reports/evidence views, optional bug analysis |
+| EVALUATION | `apps/benchmark-app`, `apps/benchmark-runner`, `packages/evaluation`, generated benchmark reports, routing metrics, Adaptive failure diagnostics; none is imported by the product executor |
+| EXPERIMENTAL | Hybrid V2 router, direct/pure Ollama benchmark strategy, Adaptive policy version switches and V1 compatibility; existing injectable LLM TestPlanner remains an advanced API, not a product mode |
+| DEFERRED | LangGraph, LangChain, CrewAI, Browser Use replacement, multi-agent orchestration, learned routing, reinforcement learning, vector databases, cloud orchestration; `apps/worker`, `packages/prompts`, and `packages/test-fixtures` remain foundation placeholders |
+
+Authentication is classified by responsibility, not directory: moving it out of
+the dashboard is intentionally not part of this freeze. Cross-run Website Memory,
+automatic regression selection, and production persistence remain deferred.
+
+## Defaults and Boundaries
+
+- No paid API is required. Functional/Regression never call a model by default.
+- The local form builds a deterministic page-text check. With temporary login,
+  it uses live observed selectors for one username/password/sign-in form, then
+  verifies the expected text. Expected behavior is literal, case-sensitive text
+  in the final observation, not an arbitrary natural-language assertion.
+- Complex known paths continue to use existing structured TestCase/TestRunner
+  APIs. The Alpha form does not synthesize arbitrary CRUD or multi-page workflows.
+- Exploratory uses the existing Adaptive V2 thresholds, bounded null retry and
+  completion gate, with a 12-action product budget. It can stop when safe local
+  candidates are exhausted; it does not expand total budgets to improve scores.
+- The local model is `qwen2.5-coder:7b`. The existing OllamaClient resolves explicit
+  base URL, then `OLLAMA_BASE_URL`, then `http://127.0.0.1:11434`. IPv4 avoids Windows
+  IPv6 localhost resolution failures. Model calls occur only inside Adaptive.
+- Unavailable models and unresolved post-handoff nulls produce unsuccessful
+  results, not a silently successful deterministic fallback.
+- Fresh browser contexts and in-memory temporary credentials remain mandatory.
+  Credentials are redacted before model/evidence exposure and cleared on cleanup.
+- The existing safety gate is retained. Core pause/resume APIs remain available;
+  the dashboard has no approval-resume UI and closes its run safely on a pending
+  approval. Product exploration blocks explicit off-origin actions and keeps
+  screenshots within its evidence directory. Redirect/pop-up containment is not
+  a hardened network sandbox.
+- Standard product reports stay under gitignored `run-output/demo/`; research
+  reports stay under `run-output/benchmark/`. Research diagnostics do not become
+  product inputs or new UI choices.
+
+Example local configuration (set in the process environment, do not commit secrets):
+
+```ini
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+```
+
+Run `npm run dashboard:qa` for the product and `npm run demo:qa` for the reliable
+deterministic presentation. Existing advanced benchmark options remain intact:
+`--planner ollama`, `--planner hybrid`, and `--planner adaptive --adaptive-policy v1`.
+
+## Evidence Behind the Decision
+
+The completed Adaptive V2 experiment, not a new benchmark, supports this policy.
+The controlled sample remained 8/8 successful, 0 escalations, 100% avoided LLM,
+and approximately 1.0s mean duration.
+
+| Generalization, 60 executions each | Expected outcome | Hidden discovery | Ambiguous goals | Recovery | Mean duration |
+| --- | --- | --- | --- | --- | --- |
+| Deterministic | 50.0% | 0% | 75.0% | 50.0% | 1.30s |
+| Pure Ollama | 56.7% | 30.0% | 70.0% | 75.0% | 6.45s |
+| Hybrid V2 | 66.7% | 40.0% | 80.0% | 74.1% | 6.97s |
+| Adaptive V2 | 71.7% | 35.0% | 90.0% | 77.1% | 10.99s |
+
+Source: completed local artifact `2026-08-28T08-42-28-433Z`, 240 executions.
+Adaptive retained 100% measured opportunity, averaged 3.9 post-handoff actions,
+and recovered 48.5% of rejected null decisions. In the separate 3-repetition A/B
+sample, expected-outcome success rose from 27.8% (V1) to 66.7% (V2), while hidden
+discovery rose from 16.7% to 33.3%. These small controlled samples are not proof
+of universal website-testing accuracy.
+
+Deterministic execution stays because known workflows need reproducibility and
+speed. Adaptive V2 is chosen for discovery because it avoids destroying the
+starting opportunity before model handoff, not because it is the fastest method.
+V2 did not achieve the full latency tradeoff: every generalization run escalated,
+26/60 were classified unnecessary, session-protection discovery remained 0/10,
+and early termination remained a leading failure. No new thresholds, scenarios,
+router, or Adaptive V3 work is authorized by this freeze.
+
+## Review Gate
+
+Next work is review, then separately authorized real-world validation and UI/product
+finalization. Do not start either automatically. Preserve the evaluation/reference
+capabilities; keep their policy versions, scenario IDs, confidence intervals, and
+diagnostics out of ordinary product configuration.

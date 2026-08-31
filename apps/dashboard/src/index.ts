@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 
 export { ReportStore } from "./report-store.js";
+export { ALPHA_EXECUTION_POLICY, alphaExecutionPolicy } from "./alpha-policy.js";
 export { startDashboardServer } from "./server.js";
 export {
   AgentTestRequestExecutor,
@@ -71,7 +72,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     `Bug analysis:\n${process.env.OPENAI_API_KEY ? "OpenAI-compatible model" : "Local evidence baseline (set OPENAI_API_KEY to enable AI generation)"}\n`
   );
   console.log(
-    `User test workflow:\n${process.env.OPENAI_API_KEY ? "Functional, exploratory, and regression modes ready" : "Exploratory mode ready (set OPENAI_API_KEY for functional and regression planning)"}\n`
+    "User test workflow:\nFunctional, Regression, and Exploratory modes ready. No paid API required.\nExploratory uses the local Ollama model when needed.\n"
   );
   console.log("Press CTRL+C to stop");
 

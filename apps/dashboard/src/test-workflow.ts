@@ -2,28 +2,33 @@ import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { BrowserController } from "@vibeqa/agent-core";
+import { Agent, type BrowserController } from "@vibeqa/agent-core";
+import { AdaptiveExecutionController } from "@vibeqa/adaptive-execution";
 import { PlaywrightBrowserController } from "@vibeqa/browser-playwright";
 import {
   actionKey,
   createElementKey,
-  ExplorationSession,
+  createExplorationState,
+  createPageStateFingerprint,
   generateActionCandidates,
-  type ActionCandidate,
-  type ExplorationFinding,
-  type ExplorationResult
+  type ActionCandidate
 } from "@vibeqa/explorer";
-import type { LLMClient } from "@vibeqa/llm";
-import { LLMTestPlanner, type TestPlanner } from "@vibeqa/planner";
+import { OllamaClient, type LLMClient } from "@vibeqa/llm";
+import type { TestPlanner } from "@vibeqa/planner";
+import { DefaultActionSafetyPolicy } from "@vibeqa/safety-policy";
 import type { BrowserAction, Observation } from "@vibeqa/schemas";
 import {
   TestTask,
+  TestEvaluator,
   type BugReport,
   type ExecutedTestStep,
   type TestCase,
   type TestResult,
   type TestStatus
 } from "@vibeqa/test-engine";
+
+import { alphaExecutionPolicy, type QATestMode } from "./alpha-policy.js";
+export type { QATestMode } from "./alpha-policy.js";
 
 import {
   redactCredentialValues,
@@ -48,8 +53,6 @@ export interface StoredTestConfiguration {
   mode: QATestMode;
   authenticationUsed: boolean;
 }
-
-export type QATestMode = "functional" | "exploratory" | "regression";
 
 export type UserTestRequestStatus = "queued" | "running" | "completed" | "failed";
 
@@ -85,7 +88,8 @@ export interface UserTestWorkflowOptions {
 }
 
 export interface AgentTestRequestExecutorOptions {
-  planner: TestPlanner | null;
+  planner?: TestPlanner | null;
+  explorationClient?: LLMClient;
   outputRoot: string;
   launchBrowser?: () => Promise<ClosableBrowserController>;
   artifactStore?: TestArtifactStore;
@@ -219,12 +223,14 @@ export class UserTestWorkflow {
 
 export class AgentTestRequestExecutor implements TestRequestExecutor {
   private readonly planner: TestPlanner | null;
+  private readonly explorationClient: LLMClient | undefined;
   private readonly launchBrowser: () => Promise<ClosableBrowserController>;
   private readonly artifactStore: TestArtifactStore;
   private readonly now: () => Date;
 
   constructor(options: AgentTestRequestExecutorOptions) {
-    this.planner = options.planner;
+    this.planner = options.planner ?? null;
+    this.explorationClient = options.explorationClient;
     this.launchBrowser =
       options.launchBrowser ??
       (async () => await PlaywrightBrowserController.launch({ headless: true }));
@@ -240,15 +246,18 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
     let browser: ClosableBrowserController | null = null;
 
     try {
+      const policy = alphaExecutionPolicy(input.mode);
       const testCase =
-        input.mode === "exploratory" ? null : await this.createTestCase(input);
+        policy.strategy === "deterministic" && this.planner
+          ? await this.createTestCase(input)
+          : null;
       const runId = createRunId(this.now(), requestId);
       browser = await this.launchBrowser();
       const executionBrowser = input.credentials
         ? new SecureAuthenticatedBrowserController(browser, input.credentials)
         : browser;
       const result = sanitizeTestResult(
-        input.mode === "exploratory"
+        policy.strategy === "adaptive"
           ? await this.runExploration(
               executionBrowser,
               input,
@@ -256,7 +265,8 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
             )
           : await new TestTask({
               browser: executionBrowser,
-              testCase: requireTestCase(testCase),
+              testCase:
+                testCase ?? (await createLocalTestCase(input, executionBrowser)),
               screenshotDirectory: this.artifactStore.screenshotDirectory(runId)
             }).run(),
         input.credentials
@@ -276,7 +286,10 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
       throw new TestWorkflowUnavailableError(input.mode);
     }
     const planned = constrainPlannedTestCase(
-      await this.planner.plan(buildPlannerRequest(input), input.websiteUrl),
+      await this.planner.plan(
+        redactCredentialValues(buildPlannerRequest(input), input.credentials),
+        input.websiteUrl
+      ),
       input.websiteUrl
     );
     if (!planned.steps.some(isVerificationStep)) {
@@ -293,25 +306,128 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
     screenshotDirectory: string
   ): Promise<TestResult> {
     const targetOrigin = new URL(input.websiteUrl).origin;
-    const explorer = new ExplorationSession({
-      browser: new EvidenceBrowserController(browser, screenshotDirectory),
-      candidateGenerator: (observation, stateFingerprint, state) =>
-        sameOriginCandidates(
-          authenticatedCandidates(
-            observation,
-            stateFingerprint,
-            state,
-            input.credentials !== null
-          ),
-          targetOrigin
-        )
+    const goal = `${input.objective}\nExpected behavior: ${input.expectedBehavior}`;
+    const state = createExplorationState(input.websiteUrl, goal);
+    const baselineSafety = new DefaultActionSafetyPolicy();
+    const evidenceBrowser = new EvidenceBrowserController(browser, screenshotDirectory);
+    const localClient = this.explorationClient ?? new OllamaClient();
+    const controller: AdaptiveExecutionController = new AdaptiveExecutionController({
+      deterministicClient: {
+        generate: async (): Promise<string> => {
+          const observation = agent.state.currentObservation;
+          if (!observation) return "null";
+          const fingerprint = createPageStateFingerprint(observation);
+          state.visitedUrls = unique([...state.visitedUrls, observation.url]);
+          state.executedActions = agent.getTrace().steps.flatMap((step) => {
+            if (!step.action || !step.observation) return [];
+            const traceAction = step.action;
+            const action =
+              traceAction.type === "type"
+                ? (agent.state.actionHistory.find(
+                    (previous) =>
+                      previous.type === "type" &&
+                      previous.selector === traceAction.selector
+                  ) ?? traceAction)
+                : traceAction;
+            const element =
+              "selector" in action
+                ? step.observation.elements.find(
+                    (item) => item.selector === action.selector
+                  )
+                : null;
+            return [
+              {
+                candidateId: "",
+                elementKey: element ? createElementKey(element) : "",
+                fromStateFingerprint: createPageStateFingerprint(step.observation),
+                toStateFingerprint: fingerprint,
+                action,
+                actionKey: actionKey(action),
+                success: step.result.success
+              }
+            ];
+          });
+          const candidate = sameOriginCandidates(
+            authenticatedCandidates(
+              observation,
+              fingerprint,
+              state,
+              input.credentials !== null
+            ),
+            targetOrigin
+          ).find(
+            (item) =>
+              baselineSafety.evaluate(item.action, {
+                goal,
+                observation,
+                actionHistory: agent.state.actionHistory
+              }).decision === "allow"
+          );
+          return candidate ? JSON.stringify(candidate.action) : "null";
+        }
+      },
+      ollamaClient: {
+        generate: async (prompt) => {
+          try {
+            return await localClient.generate(
+              [
+                "Return only one BrowserAction JSON object or null, with no explanation.",
+                "Use canonical fields: navigate {url}, click {selector}, type {selector,value}, wait {ms}, screenshot {}, getText {selector}, getCurrentUrl {}, assert {selector,containsText}. Include the action type in the type field.",
+                redactCredentialValues(prompt, input.credentials)
+              ].join("\n")
+            );
+          } catch (error) {
+            const endpoint =
+              localClient instanceof OllamaClient ? ` at ${localClient.baseUrl}` : "";
+            throw new Error(
+              `Local exploration model unavailable${endpoint}: ${errorMessage(error, input.credentials)}`
+            );
+          }
+        }
+      },
+      maxSteps: 12,
+      opportunityPreservationEnabled:
+        alphaExecutionPolicy(input.mode).adaptivePolicyVersion === "v2",
+      knownWorkflow: false,
+      escalateWhenDeterministicExhausted: false
     });
-    const result = await explorer.run({
-      startUrl: input.websiteUrl,
-      goal: `${input.objective}\nExpected behavior: ${input.expectedBehavior}`,
-      maxSteps: 12
+    const agent: Agent = new Agent({
+      browser: evidenceBrowser,
+      llmClient: controller,
+      maxSteps: 12,
+      safetyPolicy: {
+        evaluate: (action, context) => {
+          const destination =
+            "url" in action
+              ? action.url
+              : action.type === "click"
+                ? context.observation?.elements.find(
+                    (element) => element.selector === action.selector
+                  )?.href
+                : null;
+          if (
+            destination &&
+            new URL(destination, input.websiteUrl).origin !== targetOrigin
+          ) {
+            return {
+              decision: "block",
+              reason: "The action leaves the submitted website."
+            };
+          }
+          return baselineSafety.evaluate(action, context);
+        }
+      }
     });
-    return explorationToTestResult(result, input.objective);
+    await evidenceBrowser.navigate(input.websiteUrl);
+    await agent.run(goal);
+    const metadata = controller.getMetadata(agent.state.stepCount);
+    const lifecycleErrors =
+      metadata.postHandoffTerminationReason === "null-retry-exhausted"
+        ? [
+            "Exploration stopped without confirming the objective; useful actions remain."
+          ]
+        : [];
+    return explorationToTestResult(agent, input.objective, lifecycleErrors);
   }
 }
 
@@ -444,8 +560,12 @@ class EvidenceBrowserController implements BrowserController {
     await this.browser.wait(ms);
   }
 
-  async screenshot(options?: { path?: string }): Promise<Uint8Array | string> {
-    return await this.browser.screenshot(options);
+  async screenshot(): Promise<Uint8Array | string> {
+    const path = join(
+      this.screenshotDirectory,
+      `capture-${this.observationIndex++}.png`
+    );
+    return await this.browser.screenshot({ path });
   }
 
   async assert(selector: string, containsText: string): Promise<void> {
@@ -490,11 +610,7 @@ export class TestRequestValidationError extends Error {
 
 export class TestWorkflowUnavailableError extends Error {
   constructor(mode: QATestMode) {
-    super(
-      mode === "exploratory"
-        ? "Exploratory testing is not available in this workflow."
-        : `${testModeLabel(mode)} testing requires AI planning. Set OPENAI_API_KEY and restart the dashboard, or choose exploratory testing.`
-    );
+    super(`${testModeLabel(mode)} testing is not available in this workflow.`);
     this.name = "TestWorkflowUnavailableError";
   }
 }
@@ -504,12 +620,10 @@ export function createUserTestWorkflow(
   outputRoot: string
 ): UserTestWorkflow {
   const executor = new AgentTestRequestExecutor({
-    planner: llmClient ? new LLMTestPlanner(llmClient) : null,
+    explorationClient: llmClient ?? undefined,
     outputRoot
   });
-  return new UserTestWorkflow(executor, {
-    availableModes: llmClient ? ALL_TEST_MODES : ["exploratory"]
-  });
+  return new UserTestWorkflow(executor);
 }
 
 export function validateCreateTestRequest(
@@ -575,8 +689,8 @@ export function validateCreateTestRequest(
 
   return {
     websiteUrl: parsedUrl.toString(),
-    objective,
-    expectedBehavior,
+    objective: input.credentials?.redact(objective) ?? objective,
+    expectedBehavior: input.credentials?.redact(expectedBehavior) ?? expectedBehavior,
     mode: input.mode,
     credentials: input.credentials
   };
@@ -603,45 +717,124 @@ function isVerificationStep(step: TestCase["steps"][number]): boolean {
   return step.action.type === "assert" || step.expected !== undefined;
 }
 
-function requireTestCase(testCase: TestCase | null): TestCase {
-  if (!testCase) {
-    throw new Error("A structured TestCase is required for this testing mode.");
+async function createLocalTestCase(
+  input: CreateTestRequestInput,
+  browser: BrowserController
+): Promise<TestCase> {
+  const steps: TestCase["steps"] = [];
+  if (input.credentials) {
+    await browser.navigate(input.websiteUrl);
+    const observation = await browser.observe();
+    const elements = observation.elements.filter(
+      (element) => element.visible && element.enabled
+    );
+    const usernames = elements.filter(
+      (element) =>
+        element.editable &&
+        classifyCredentialElement(element.selector, element.inputType) === "username"
+    );
+    const passwords = elements.filter(
+      (element) =>
+        element.editable &&
+        classifyCredentialElement(element.selector, element.inputType) === "password"
+    );
+    const submits = elements.filter(
+      (element) =>
+        (element.tagName === "button" ||
+          element.role === "button" ||
+          element.inputType === "submit") &&
+        /\b(?:sign[ -]?in|log[ -]?in)\b/i.test(
+          `${element.accessibleName ?? ""} ${element.text}`
+        )
+    );
+    const username = usernames[0];
+    const password = passwords[0];
+    const submit = submits[0];
+    if (
+      usernames.length !== 1 ||
+      passwords.length !== 1 ||
+      submits.length !== 1 ||
+      !username ||
+      !password ||
+      !submit
+    ) {
+      throw new TestRequestValidationError(
+        "The local login check requires one visible username field, password field, and sign-in button. Use a structured test for other workflows."
+      );
+    }
+    steps.push(
+      {
+        name: "Enter temporary username",
+        action: {
+          type: "type",
+          selector: username.selector,
+          value: TEMPORARY_USERNAME_PLACEHOLDER
+        }
+      },
+      {
+        name: "Enter temporary password",
+        action: {
+          type: "type",
+          selector: password.selector,
+          value: TEMPORARY_PASSWORD_PLACEHOLDER
+        }
+      },
+      { name: "Sign in", action: { type: "click", selector: submit.selector } },
+      { name: "Wait for sign-in result", action: { type: "wait", ms: 250 } }
+    );
   }
-  return testCase;
+  steps.push({
+    name: "Verify expected page text",
+    action: { type: "getText", selector: "body" },
+    expected: { requiredText: input.expectedBehavior }
+  });
+  return { goal: input.objective, startUrl: input.websiteUrl, steps };
 }
 
 function explorationToTestResult(
-  exploration: ExplorationResult,
-  objective: string
+  agent: Agent,
+  objective: string,
+  lifecycleErrors: string[]
 ): TestResult {
-  const executedSteps: ExecutedTestStep[] = exploration.state.executedActions.map(
-    (record, index) => {
-      const observation = exploration.state.observedPageStates.find(
-        (node) => node.fingerprint === record.toStateFingerprint
-      )?.observation;
-      return {
-        index,
-        name: `Explore with ${record.action.type}`,
-        action: record.action,
-        observation: observation ?? null,
-        status: record.success ? "passed" : "failed",
-        evaluatorFeedback: null,
-        errors: record.error ? [record.error] : []
-      };
-    }
-  );
-  const bugReports = exploration.findings.map((finding, index) =>
-    explorationFindingToBugReport(finding, exploration, index)
-  );
-  const lifecycleErrors =
-    exploration.status === "paused"
-      ? ["Exploration paused because an action requires human approval."]
-      : exploration.status === "halted" && exploration.state.errors.length === 0
-        ? ["Exploration halted before reaching a stopping condition."]
-        : [];
+  const trace = agent.getTrace();
+  const evaluator = new TestEvaluator();
+  const executedSteps: ExecutedTestStep[] = [];
+  const bugReports: BugReport[] = [];
+  for (const [traceIndex, step] of trace.steps.entries()) {
+    if (!step.action) continue;
+    const observation =
+      trace.steps.slice(traceIndex + 1).find((next) => next.observation)?.observation ??
+      null;
+    const testStep = { name: `Explore with ${step.action.type}`, action: step.action };
+    const index = executedSteps.length;
+    const evaluation = evaluator.evaluate(
+      testStep,
+      index,
+      step,
+      step.observation,
+      observation
+    );
+    bugReports.push(...evaluation.bugReports);
+    executedSteps.push({
+      index,
+      ...testStep,
+      observation,
+      status: evaluation.success ? "passed" : "failed",
+      evaluatorFeedback: step.evaluation ?? null,
+      errors: evaluation.errors
+    });
+  }
+  if (agent.getPendingApproval()) {
+    lifecycleErrors.push(
+      "Exploration stopped because an action requires human approval. No risky action was executed."
+    );
+  }
   const errors = unique([
-    ...exploration.state.errors,
-    ...exploration.findings.map((finding) => finding.message),
+    ...agent.state.errors,
+    ...executedSteps.flatMap((step) => step.errors),
+    ...trace.steps.flatMap(
+      (step) => step.observation?.consoleErrors.map((error) => error.text) ?? []
+    ),
     ...lifecycleErrors
   ]);
 
@@ -653,9 +846,9 @@ function explorationToTestResult(
       stepName: "Exploration session",
       category: "evaluation",
       evidence: {
-        url: exploration.state.currentUrl,
-        consoleErrors: [],
-        screenshot: exploration.state.screenshots.at(-1) ?? null
+        url: agent.state.currentObservation?.url ?? null,
+        consoleErrors: agent.state.currentObservation?.consoleErrors ?? [],
+        screenshot: agent.state.currentObservation?.screenshotPath ?? null
       }
     });
   }
@@ -664,37 +857,16 @@ function explorationToTestResult(
     goal: objective,
     status: bugReports.length === 0 && errors.length === 0 ? "passed" : "failed",
     executedSteps,
-    screenshots: exploration.state.screenshots,
+    screenshots: unique(
+      trace.steps.flatMap((step) =>
+        step.observation?.screenshotPath ? [step.observation.screenshotPath] : []
+      )
+    ),
     errors,
     bugReports,
     trace: {
       goal: objective,
-      steps: exploration.traces.flatMap((trace) => trace.steps)
-    }
-  };
-}
-
-function explorationFindingToBugReport(
-  finding: ExplorationFinding,
-  exploration: ExplorationResult,
-  index: number
-): BugReport {
-  const observation = exploration.state.observedPageStates.find(
-    (node) => node.fingerprint === finding.stateFingerprint
-  )?.observation;
-  return {
-    title:
-      finding.type === "console_error"
-        ? "Console error discovered during exploration"
-        : "Browser action failed during exploration",
-    description: finding.message,
-    stepIndex: index,
-    stepName: `Exploration finding ${index + 1}`,
-    category: finding.type === "console_error" ? "console" : "action",
-    evidence: {
-      url: finding.url,
-      consoleErrors: observation?.consoleErrors ?? [],
-      screenshot: finding.evidence[0] ?? null
+      steps: trace.steps
     }
   };
 }
@@ -769,13 +941,16 @@ function classifyCredentialElement(
 }
 
 function storedConfiguration(input: CreateTestRequestInput): StoredTestConfiguration {
-  return {
-    websiteUrl: input.websiteUrl,
-    objective: input.objective,
-    expectedBehavior: input.expectedBehavior,
-    mode: input.mode,
-    authenticationUsed: input.credentials !== null
-  };
+  return redactCredentialValues(
+    {
+      websiteUrl: input.websiteUrl,
+      objective: input.objective,
+      expectedBehavior: input.expectedBehavior,
+      mode: input.mode,
+      authenticationUsed: input.credentials !== null
+    },
+    input.credentials
+  );
 }
 
 function testModeLabel(mode: QATestMode): string {

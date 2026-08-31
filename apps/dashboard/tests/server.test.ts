@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 
 import { MockLLMClient } from "@vibeqa/llm";
+import { PlaywrightBrowserController } from "@vibeqa/browser-playwright";
 import { describe, expect, it } from "vitest";
 
 import { startDashboardServer } from "../src/server.js";
@@ -16,6 +17,39 @@ const analysisResponse = JSON.stringify({
 });
 
 describe("dashboard server", () => {
+  it("enables temporary-login fields under the restricted script policy", async () => {
+    const dashboard = await startDashboardServer({
+      port: 0,
+      outputRoot: fixtureRoot,
+      llmClient: null
+    });
+    const browser = await PlaywrightBrowserController.launch({ headless: true });
+    try {
+      const response = await fetch(`${dashboard.url}/tests/new`);
+      expect(response.headers.get("content-security-policy")).toMatch(
+        /script-src 'sha256-[A-Za-z0-9+/=]+'/
+      );
+      expect(response.headers.get("content-security-policy")).not.toContain(
+        "script-src 'unsafe-inline'"
+      );
+      await browser.navigate(`${dashboard.url}/tests/new`);
+      const fields = async () =>
+        (await browser.observe()).elements.filter((element) =>
+          /#loginUsername|#loginPassword/.test(element.selector)
+        );
+      expect((await fields()).every((element) => !element.enabled)).toBe(true);
+      await browser.click('input[name="loginRequired"]');
+      expect(await fields()).toHaveLength(2);
+      expect((await fields()).every((element) => element.enabled)).toBe(true);
+      await browser.click('input[name="loginRequired"]');
+      expect((await fields()).every((element) => !element.enabled)).toBe(true);
+      expect((await browser.observe()).consoleErrors).toEqual([]);
+    } finally {
+      await browser.close();
+      await dashboard.close();
+    }
+  });
+
   it("renders a report, exposes structured run data, serves evidence, and closes", async () => {
     const dashboard = await startDashboardServer({
       host: "127.0.0.1",
@@ -115,11 +149,13 @@ describe("dashboard server", () => {
       const newTestPage = await fetch(`${dashboard.url}/tests/new`);
       const newTestHtml = await newTestPage.text();
       expect(newTestHtml).toContain("Run a website test");
-      expect(newTestHtml).toContain("Exploratory mode ready");
+      expect(newTestHtml).toContain("All test modes ready");
       expect(newTestHtml).toContain('value="functional"');
       expect(newTestHtml).toContain('value="exploratory"');
       expect(newTestHtml).toContain('value="regression"');
-      expect(newTestHtml).toContain("disabled");
+      expect(newTestHtml).not.toMatch(/name="(?:planner|strategy|adaptivePolicy)"/);
+      expect(newTestHtml).not.toContain("OPENAI_API_KEY");
+      expect(newTestHtml).not.toMatch(/Wilson|routing regret|adaptive diagnostics/);
     } finally {
       await dashboard.close();
     }

@@ -14,6 +14,27 @@ import type {
 
 export type DashboardSection = "dashboard" | "history" | "details" | "new-test";
 
+// Keep this static: the response CSP permits only this exact inline script.
+export const AUTHENTICATION_FORM_SCRIPT = `
+(() => {
+  const toggle = document.querySelector('input[name="loginRequired"]');
+  const fields = [
+    document.querySelector('input[name="loginUsername"]'),
+    document.querySelector('input[name="loginPassword"]')
+  ];
+  const syncAuthentication = () => {
+    for (const field of fields) {
+      if (!(field instanceof HTMLInputElement) || !(toggle instanceof HTMLInputElement)) continue;
+      field.disabled = !toggle.checked;
+      field.required = toggle.checked;
+      if (!toggle.checked) field.value = "";
+    }
+  };
+  toggle?.addEventListener("change", syncAuthentication);
+  syncAuthentication();
+})();
+`;
+
 export function renderDashboardPage(
   runs: DashboardRun[],
   selectedRun: DashboardRun | null,
@@ -113,13 +134,13 @@ export function renderTestCreationPage(
               >${escapeHtml(values.objective)}</textarea>
             </label>
             <label class="field-group" for="expectedBehavior">
-              <span>Expected behavior</span>
+              <span>Expected behavior / page text</span>
               <textarea
                 id="expectedBehavior"
                 name="expectedBehavior"
                 maxlength="1500"
                 rows="4"
-                placeholder="The user reaches the dashboard without browser errors"
+                placeholder="Dashboard"
                 required
               >${escapeHtml(values.expectedBehavior)}</textarea>
             </label>
@@ -171,25 +192,7 @@ export function renderTestCreationPage(
             </div>
           </form>
         </section>
-        <script>
-          (() => {
-            const toggle = document.querySelector('input[name="loginRequired"]');
-            const fields = [
-              document.querySelector('input[name="loginUsername"]'),
-              document.querySelector('input[name="loginPassword"]')
-            ];
-            const syncAuthentication = () => {
-              for (const field of fields) {
-                if (!(field instanceof HTMLInputElement) || !(toggle instanceof HTMLInputElement)) continue;
-                field.disabled = !toggle.checked;
-                field.required = toggle.checked;
-                if (!toggle.checked) field.value = "";
-              }
-            };
-            toggle?.addEventListener("change", syncAuthentication);
-            syncAuthentication();
-          })();
-        </script>
+        <script>${AUTHENTICATION_FORM_SCRIPT}</script>
       </main>
     </div>
   `);

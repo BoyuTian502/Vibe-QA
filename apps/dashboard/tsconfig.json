@@ -8,11 +8,13 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
+    { "path": "../../packages/adaptive-execution" },
     { "path": "../../packages/agent-core" },
     { "path": "../../packages/browser-playwright" },
     { "path": "../../packages/explorer" },
     { "path": "../../packages/llm" },
     { "path": "../../packages/planner" },
+    { "path": "../../packages/safety-policy" },
     { "path": "../../packages/schemas" },
     { "path": "../../packages/test-engine" }
   ]

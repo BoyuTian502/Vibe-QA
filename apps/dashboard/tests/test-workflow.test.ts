@@ -2,12 +2,16 @@ import type { BrowserController } from "@vibeqa/agent-core";
 import type { TestPlanner } from "@vibeqa/planner";
 import type { ElementInformation, Observation } from "@vibeqa/schemas";
 import type { TestResult } from "@vibeqa/test-engine";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import { alphaExecutionPolicy } from "../src/alpha-policy.js";
+import { TemporaryLoginCredentials } from "../src/secure-credentials.js";
 
 import {
   AgentTestRequestExecutor,
   TestRequestValidationError,
   UserTestWorkflow,
+  createUserTestWorkflow,
   validateCreateTestRequest,
   type CreateTestRequestInput,
   type QATestMode,
@@ -16,6 +20,154 @@ import {
 } from "../src/test-workflow.js";
 
 describe("UserTestWorkflow", () => {
+  it.each(["functional", "regression"] as const)(
+    "defaults %s to local deterministic execution",
+    async (mode) => {
+      const generate = vi
+        .fn()
+        .mockRejectedValue(new Error("No model should be called"));
+      const artifacts = new MemoryArtifactStore();
+      const executor = new AgentTestRequestExecutor({
+        outputRoot: "unused",
+        explorationClient: { generate },
+        launchBrowser: async () => new FakeBrowserController(),
+        artifactStore: artifacts
+      });
+      expect(alphaExecutionPolicy(mode)).toEqual({
+        strategy: "deterministic",
+        adaptivePolicyVersion: null
+      });
+      await expect(
+        executor.execute(
+          { ...testInput(mode), expectedBehavior: "Sign in" },
+          "local-default"
+        )
+      ).resolves.toMatchObject({ status: "passed" });
+      expect(generate).not.toHaveBeenCalled();
+      expect(artifacts.saved?.executedSteps.map((step) => step.action)).toEqual([
+        { type: "getText", selector: "body" }
+      ]);
+    }
+  );
+
+  it("makes every product mode available without a paid API or planner option", () => {
+    expect(createUserTestWorkflow(null, "unused").availableModes).toEqual([
+      "functional",
+      "exploratory",
+      "regression"
+    ]);
+    expect(alphaExecutionPolicy("exploratory")).toEqual({
+      strategy: "adaptive",
+      adaptivePolicyVersion: "v2"
+    });
+  });
+
+  it("does not pass a local check when the expected text is absent", async () => {
+    const artifacts = new MemoryArtifactStore();
+    const executor = new AgentTestRequestExecutor({
+      outputRoot: "unused",
+      launchBrowser: async () => new FakeBrowserController(),
+      artifactStore: artifacts
+    });
+    await expect(
+      executor.execute(
+        { ...testInput("functional"), expectedBehavior: "Missing content" },
+        "missing-text"
+      )
+    ).resolves.toMatchObject({ status: "failed" });
+    expect(
+      artifacts.saved?.bugReports.some((report) => report.category === "content")
+    ).toBe(true);
+  });
+
+  it("uses the existing Adaptive V2 path before narrowing a high-value exploratory state", async () => {
+    const links: ElementInformation[] = Array.from({ length: 4 }, (_, index) => ({
+      id: `link-${index}`,
+      tagName: "a",
+      role: "link",
+      accessibleName: `Page ${index}`,
+      text: `Page ${index}`,
+      visible: true,
+      enabled: true,
+      editable: false,
+      selector: `#link-${index}`,
+      href: `http://example.test/page-${index}`
+    }));
+    const browser = new FakeBrowserController(links);
+    const artifacts = new MemoryArtifactStore();
+    const generate = vi.fn().mockResolvedValue("null");
+    const executor = new AgentTestRequestExecutor({
+      outputRoot: "unused",
+      explorationClient: { generate },
+      launchBrowser: async () => browser,
+      artifactStore: artifacts
+    });
+    const input = {
+      ...testInput("exploratory"),
+      objective:
+        "Explore all available workspace pages for private-user with private-pass-value",
+      expectedBehavior: "Useful content is available",
+      credentials: new TemporaryLoginCredentials("private-user", "private-pass-value"),
+      hiddenBugId: "SECRET-BENCHMARK-ID",
+      hiddenSelector: "#secret-target",
+      routingRecommendation: "ollama"
+    };
+    await expect(executor.execute(input, "adaptive-default")).resolves.toMatchObject({
+      status: "failed"
+    });
+    expect(generate).toHaveBeenCalledTimes(2);
+    const prompt = generate.mock.calls[0]?.[0] as string;
+    expect(prompt).toContain("Adaptive execution context:");
+    expect(prompt).toContain("Handoff mode: early");
+    expect(prompt).not.toMatch(
+      /SECRET-BENCHMARK-ID|secret-target|routingRecommendation/
+    );
+    expect(prompt).not.toMatch(/private-user|private-pass-value/);
+    expect(JSON.stringify(artifacts.savedConfiguration)).not.toMatch(
+      /private-user|private-pass-value/
+    );
+    expect(browser.navigatedUrls).toEqual([input.websiteUrl]);
+    expect(artifacts.saved?.errors.join(" ")).toContain(
+      "without confirming the objective"
+    );
+    expect(browser.closed).toBe(true);
+  });
+
+  it("records local model unavailability without falling back to a successful result", async () => {
+    const links: ElementInformation[] = Array.from({ length: 4 }, (_, index) => ({
+      id: `link-${index}`,
+      tagName: "a",
+      role: "link",
+      accessibleName: `Page ${index}`,
+      text: `Page ${index}`,
+      visible: true,
+      enabled: true,
+      editable: false,
+      selector: `#link-${index}`,
+      href: `http://example.test/page-${index}`
+    }));
+    const artifacts = new MemoryArtifactStore();
+    const executor = new AgentTestRequestExecutor({
+      outputRoot: "unused",
+      explorationClient: {
+        generate: async () => {
+          throw new Error("connection refused");
+        }
+      },
+      launchBrowser: async () => new FakeBrowserController(links),
+      artifactStore: artifacts
+    });
+    await expect(
+      executor.execute(
+        { ...testInput("exploratory"), objective: "Explore the workspace" },
+        "unavailable"
+      )
+    ).resolves.toMatchObject({ status: "failed" });
+    expect(artifacts.saved?.errors.join(" ")).toContain(
+      "Local exploration model unavailable"
+    );
+  });
+
   it("creates a request and preserves status through completion", async () => {
     const workflow = new UserTestWorkflow(
       {
@@ -121,7 +273,7 @@ describe("UserTestWorkflow", () => {
     });
   });
 
-  it("runs exploratory configuration through the existing ExplorationSession", async () => {
+  it("uses existing Explorer candidates and stops when no in-scope candidates remain", async () => {
     const browser = new FakeBrowserController([
       {
         id: "external-link",
