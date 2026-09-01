@@ -499,7 +499,17 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
         }
       }
     });
-    await evidenceBrowser.navigate(input.websiteUrl);
+    try {
+      await evidenceBrowser.navigate(input.websiteUrl);
+    } catch (error) {
+      return initialNavigationFailureResult(
+        input.objective,
+        input.websiteUrl,
+        cleanRuntimeError(error, input.credentials),
+        browser.getEvents(),
+        modelRuntime.getDiagnostics()
+      );
+    }
     await agent.run(goal);
     const metadata = controller.getMetadata(agent.state.stepCount);
     const lifecycleErrors =
@@ -798,6 +808,71 @@ function isLoadingObservation(observation: Observation): boolean {
 function isBrowserExecutionError(error: string): boolean {
   return /(?:page\.(?:goto|screenshot)|locator\.|net::ERR_|Target page, context or browser has been closed|The page remained empty or loading|Execution context was destroyed|frame was detached|Timeout \d+ms exceeded)/i.test(
     error
+  );
+}
+
+function initialNavigationFailureResult(
+  objective: string,
+  url: string,
+  error: string,
+  browserRetries: ReturnType<RetryingBrowserController["getEvents"]>,
+  modelOutputRecovery: ReturnType<ModelActionRuntime["getDiagnostics"]>
+): ProductTestResult {
+  const timestamp = new Date().toISOString();
+  const action = { type: "navigate" as const, url };
+  return {
+    goal: objective,
+    status: "failed",
+    executedSteps: [],
+    screenshots: [],
+    errors: [error],
+    bugReports: [
+      {
+        title: "Exploratory browser setup failed",
+        description:
+          "The browser could not open the submitted website after bounded retry.",
+        stepIndex: -1,
+        stepName: "Open the submitted website",
+        category: "action",
+        evidence: { url, consoleErrors: [], screenshot: null }
+      }
+    ],
+    trace: {
+      goal: objective,
+      steps: [
+        {
+          timestamp,
+          observation: null,
+          thought: {},
+          action,
+          result: { success: false, error }
+        }
+      ]
+    },
+    execution: {
+      requestedMode: "exploratory",
+      strategy: "adaptive-v2",
+      modelInvocationCount: 0,
+      terminationReason: "BROWSER_ERROR",
+      startedAt: "",
+      completedAt: "",
+      durationMs: 0,
+      pagesVisited: [],
+      stateCount: 0,
+      actionCount: 0,
+      browserRetries,
+      modelOutputRecovery
+    }
+  };
+}
+
+function cleanRuntimeError(
+  error: unknown,
+  credentials: TemporaryLoginCredentials | null
+): string {
+  return errorMessage(error, credentials).replace(
+    new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "gu"),
+    ""
   );
 }
 

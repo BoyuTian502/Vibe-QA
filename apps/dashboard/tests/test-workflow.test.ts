@@ -729,6 +729,40 @@ describe("UserTestWorkflow", () => {
     expect(browser.closed).toBe(true);
   });
 
+  it("saves a typed browser result when initial exploration navigation exhausts retry", async () => {
+    const browser = new FakeBrowserController(explorationLinks());
+    const navigate = vi
+      .spyOn(browser, "navigate")
+      .mockRejectedValue(new Error("page.goto: net::ERR_CONNECTION_CLOSED"));
+    const artifacts = new MemoryArtifactStore();
+    const generate = vi.fn();
+    const execution = await new AgentTestRequestExecutor({
+      outputRoot: "unused",
+      launchBrowser: async () => browser,
+      artifactStore: artifacts,
+      explorationClient: { generate }
+    }).execute(
+      { ...testInput("exploratory"), objective: "Explore all pages" },
+      "initial-navigation-failure"
+    );
+    expect(execution.outcome?.kind).toBe("BROWSER_ERROR");
+    expect(navigate).toHaveBeenCalledTimes(2);
+    expect(generate).not.toHaveBeenCalled();
+    expect(artifacts.saved?.execution).toMatchObject({
+      strategy: "adaptive-v2",
+      terminationReason: "BROWSER_ERROR",
+      actionCount: 0
+    });
+    expect(artifacts.saved?.trace.steps[0]).toMatchObject({
+      action: { type: "navigate" },
+      result: { success: false }
+    });
+    expect(artifacts.saved?.execution?.browserRetries?.at(-1)?.outcome).toBe(
+      "exhausted"
+    );
+    expect(browser.closed).toBe(true);
+  });
+
   it("bounds loading waits instead of reporting an empty exploration as a pass", async () => {
     const browser = new FakeBrowserController();
     const observe = browser.observe.bind(browser);

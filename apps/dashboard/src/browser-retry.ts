@@ -132,7 +132,7 @@ export function isTransientBrowserError(error: unknown, navigation = false): boo
   if (!(error instanceof Error)) return false;
   const message = error.message;
   if (
-    /Target page, context or browser has been closed|ERR_(?:CONNECTION|NAME|CERT|PROXY)|401|403|credential|password|unsupported|safety|denied|not found/i.test(
+    /Target page, context or browser has been closed|ERR_(?:CONNECTION_REFUSED|NAME_NOT_RESOLVED|CERT_|PROXY_|INTERNET_DISCONNECTED)|401|403|credential|password|unsupported|safety|denied|not found/i.test(
       message
     )
   ) {
@@ -142,13 +142,22 @@ export function isTransientBrowserError(error: unknown, navigation = false): boo
     /Execution context was destroyed|frame was detached|detached Frame/i.test(message)
   )
     return true;
-  if (navigation && /net::ERR_ABORTED|Navigation.*interrupted/i.test(message))
+  if (
+    navigation &&
+    /net::ERR_(?:ABORTED|CONNECTION_CLOSED|CONNECTION_RESET)|Navigation.*interrupted/i.test(
+      message
+    )
+  )
     return true;
   return /Timeout \d+ms exceeded|TimeoutError/i.test(message);
 }
 
 function browserErrorMessage(error: unknown): string {
   return error instanceof Error
-    ? error.message.replace(/\s+/gu, " ").slice(0, 300)
+    ? stripAnsiStyles(error.message).replace(/\s+/gu, " ").slice(0, 300)
     : "Transient browser operation failed.";
+}
+
+function stripAnsiStyles(value: string): string {
+  return value.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "gu"), "");
 }

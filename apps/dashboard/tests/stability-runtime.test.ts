@@ -149,6 +149,23 @@ describe("transient browser retry", () => {
     expect(retrying.getEvents()).toEqual([]);
     expect(isTransientBrowserError(new Error("401 invalid credentials"))).toBe(false);
   });
+
+  it("retries connection-closed navigation but not connection-refused", async () => {
+    const browser = new FakeBrowser();
+    vi.spyOn(browser, "navigate")
+      .mockRejectedValueOnce(new Error("page.goto: net::ERR_CONNECTION_CLOSED"))
+      .mockResolvedValueOnce();
+    const retrying = new RetryingBrowserController(browser);
+    await expect(retrying.navigate("https://example.test")).resolves.toBeUndefined();
+    expect(browser.navigate).toHaveBeenCalledTimes(2);
+    expect(retrying.getEvents().map((event) => event.outcome)).toEqual([
+      "retrying",
+      "recovered"
+    ]);
+    expect(
+      isTransientBrowserError(new Error("page.goto: net::ERR_CONNECTION_REFUSED"), true)
+    ).toBe(false);
+  });
 });
 
 function observation(): Observation {
