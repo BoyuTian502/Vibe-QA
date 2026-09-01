@@ -1,7 +1,9 @@
-# v0.1.0-alpha Release Notes (Prepared)
+# v0.1.0-alpha Release Notes
 
-Status: release candidate documentation, awaiting final review. No Git tag or
-GitHub release is created by this milestone; workspace package versions remain
+Status: released as the
+[`v0.1.0-alpha`](https://github.com/BoyuTian502/Vibe-QA/releases/tag/v0.1.0-alpha)
+GitHub pre-release. The tag points to tested commit
+`650367388c2f6fdfa1d9284bbd98879578adc545`; workspace package versions remain
 unchanged.
 
 ## Included

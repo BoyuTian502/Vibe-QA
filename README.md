@@ -1,10 +1,13 @@
 # Vibe-QA
 
-**Local website testing with browser evidence. Preparing v0.1.0-alpha for review.**
+**v0.1.0-alpha released**
+
+Local AI-assisted website testing with deterministic workflows, bounded autonomous
+exploration, browser evidence, and safety controls.
 
 Vibe-QA operates a real browser, checks what happened, and records screenshots,
-actions, and findings for developers and small teams. It complements scripted
-tests; it does not certify that a website is bug-free.
+actions, traces, and findings for developers and small teams. It complements
+scripted tests; it does not certify that a website is bug-free.
 
 ## Why It Exists
 
@@ -204,6 +207,8 @@ Ollama rerun, which still encountered the documented model-output limitation.
 
 ## Known Alpha Limitations
 
+- This is a local Alpha and research/engineering prototype, not a production SaaS
+  service.
 - `qwen2.5-coder:7b` can return invalid JSON, invalid targets, or stop early.
   Invalid JSON receives at most two correction attempts; exhausted output is
   reported as `MODEL_OUTPUT_INVALID` and no action is invented. Invalid targets
@@ -217,6 +222,25 @@ Ollama rerun, which still encountered the documented model-output limitation.
 
 ## Development And Release
 
+Current release: [`v0.1.0-alpha`](https://github.com/BoyuTian502/Vibe-QA/releases/tag/v0.1.0-alpha)
+
+Status: Alpha pre-release
+
+Default execution remains local. The released Alpha includes:
+
+- Deterministic Functional workflows and Regression checks.
+- Adaptive V2 Exploratory execution with local Ollama escalation.
+- Playwright browser execution, real-world form workflows, and isolated
+  authentication/session support.
+- Temporary credential redaction and safety decisions that allow, block, or
+  require approval.
+- Trace, screenshots, structured evidence, and the local dashboard.
+- Redirect-aware navigation verification and evidence-backed 404/soft-404 findings.
+- Bounded invalid-target and malformed-model-output recovery.
+- Typed browser, model, and Agent failure outcomes.
+
+Development verification commands:
+
 ```bash
 npm run build
 npm test
@@ -224,12 +248,11 @@ npm run lint
 npm run format:check
 ```
 
-This is release preparation only. Package versions are unchanged and no
-`v0.1.0-alpha` tag or GitHub release has been created.
 See [release notes](docs/RELEASE_NOTES_v0.1.0-alpha.md).
 
 ## Future Work
 
-Interactive product approvals, cross-run website memory, change-based regression
-selection, and stronger reproduction evidence remain separate, review-gated work.
-No new planner or framework is part of this milestone.
+Interactive dashboard approval/resume, stronger local-model reliability and
+reproduction evidence, cross-run website memory, change-based regression selection,
+and optional cloud/multi-user deployment remain separate, review-gated work. These
+are directions, not promised release features.

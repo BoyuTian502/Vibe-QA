@@ -3,5 +3,7 @@ dist/
 coverage/
 run-output/
 .auth/
+.env
+.env.*
+!.env.example
 *.tsbuildinfo
-
