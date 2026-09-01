@@ -643,7 +643,39 @@ describe("UserTestWorkflow", () => {
     expect(browser.navigatedUrls).toContain("http://example.test/explored");
   });
 
-  it("rejects malformed model actions without claiming model connectivity failed", async () => {
+  it("executes a corrected model action and records recovery diagnostics", async () => {
+    const browser = new FakeBrowserController(explorationLinks());
+    const artifacts = new MemoryArtifactStore();
+    const generate = vi
+      .fn()
+      .mockResolvedValueOnce('{"type":"navigate"}')
+      .mockResolvedValueOnce('{"type":"navigate","url":"http://example.test/explored"}')
+      .mockResolvedValue("null");
+    await new AgentTestRequestExecutor({
+      outputRoot: "unused",
+      launchBrowser: async () => browser,
+      artifactStore: artifacts,
+      explorationClient: { generate }
+    }).execute(
+      {
+        ...testInput("exploratory"),
+        objective: "Explore all pages",
+        expectedBehavior: ""
+      },
+      "repaired-model-output"
+    );
+    expect(browser.navigatedUrls).toContain("http://example.test/explored");
+    expect(artifacts.saved?.execution?.modelOutputRecovery).toMatchObject({
+      generationAttempts: 4,
+      invalidResponseCount: 1,
+      retryCount: 1,
+      recoveredCount: 1,
+      exhaustionCount: 0
+    });
+    expect(artifacts.saved?.trace.steps.some((step) => step.action)).toBe(true);
+  });
+
+  it("bounds malformed model correction and records a typed invalid-output result", async () => {
     const browser = new FakeBrowserController(explorationLinks());
     const artifacts = new MemoryArtifactStore();
     await new AgentTestRequestExecutor({
@@ -660,8 +692,41 @@ describe("UserTestWorkflow", () => {
       "malformed"
     );
     expect(artifacts.saved?.execution?.actionCount).toBe(0);
-    expect(artifacts.saved?.errors.join(" ")).toContain("invalid BrowserAction JSON");
+    expect(artifacts.saved?.errors.join(" ")).toContain("MODEL_OUTPUT_INVALID");
     expect(artifacts.saved?.errors.join(" ")).not.toContain("unavailable");
+    expect(artifacts.saved?.execution).toMatchObject({
+      terminationReason: "MODEL_OUTPUT_INVALID",
+      modelOutputRecovery: {
+        generationAttempts: 3,
+        invalidResponseCount: 3,
+        retryCount: 2,
+        recoveredCount: 0,
+        exhaustionCount: 1
+      }
+    });
+    expect(browser.closed).toBe(true);
+  });
+
+  it("records a recovered transient observation retry in product execution", async () => {
+    const browser = new FakeBrowserController(explorationLinks());
+    const observe = browser.observe.bind(browser);
+    vi.spyOn(browser, "observe")
+      .mockRejectedValueOnce(new Error("Execution context was destroyed"))
+      .mockImplementation(observe);
+    const artifacts = new MemoryArtifactStore();
+    await new AgentTestRequestExecutor({
+      outputRoot: "unused",
+      launchBrowser: async () => browser,
+      artifactStore: artifacts,
+      explorationClient: { generate: async () => "null" }
+    }).execute(
+      { ...testInput("exploratory"), objective: "Explore all pages" },
+      "browser-retry"
+    );
+    expect(
+      artifacts.saved?.execution?.browserRetries?.map((event) => event.outcome)
+    ).toEqual(["retrying", "recovered"]);
+    expect(browser.closed).toBe(true);
   });
 
   it("bounds loading waits instead of reporting an empty exploration as a pass", async () => {
@@ -698,7 +763,8 @@ function explorationLinks(): ElementInformation[] {
     enabled: true,
     editable: false,
     selector: `#page-${index}`,
-    href: `http://example.test/page-${index}`
+    href:
+      index === 0 ? "http://example.test/explored" : `http://example.test/page-${index}`
   }));
 }
 

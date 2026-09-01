@@ -25,6 +25,22 @@ export type {
   UserTestWorkflowOptions
 } from "./test-workflow.js";
 export {
+  ModelActionRuntime,
+  ModelOutputInvalidError,
+  buildActionContract
+} from "./model-action-runtime.js";
+export type {
+  ModelActionRuntimeOptions,
+  ModelOutputFailure,
+  ModelOutputRecoveryDiagnostics
+} from "./model-action-runtime.js";
+export { RetryingBrowserController, isTransientBrowserError } from "./browser-retry.js";
+export type {
+  BrowserRetryEvent,
+  BrowserRetryOperation,
+  RetryingBrowserControllerOptions
+} from "./browser-retry.js";
+export {
   SecureAuthenticatedBrowserController,
   TEMPORARY_PASSWORD_PLACEHOLDER,
   TEMPORARY_USERNAME_PLACEHOLDER,

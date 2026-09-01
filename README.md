@@ -193,6 +193,10 @@ QA Practice exploration. Autonomous runs can navigate real pages but do not alwa
 finish the objective. See [release readiness](docs/ALPHA_RELEASE_READINESS.md) for
 the final small smoke matrix, exact outcomes, and evidence references.
 
+The [Alpha runtime stability report](docs/ALPHA_STABILITY_REPORT.md) records the
+31-run pre-release hardening matrix, bounded invalid-JSON recovery, current-DOM
+selector grounding, cleanup checks, and remaining local-model limitations.
+
 The final [Exploratory navigation acceptance](docs/ALPHA_EXPLORATORY_NAVIGATION_ACCEPTANCE.md)
 verifies redirect handling and visible 404 findings against real QA Practice pages.
 It separates a scripted replay of the recorded destinations from the autonomous
@@ -201,7 +205,9 @@ Ollama rerun, which still encountered the documented model-output limitation.
 ## Known Alpha Limitations
 
 - `qwen2.5-coder:7b` can return invalid JSON, invalid targets, or stop early.
-  Invalid targets receive bounded re-observation/replanning, not unlimited retries.
+  Invalid JSON receives at most two correction attempts; exhausted output is
+  reported as `MODEL_OUTPUT_INVALID` and no action is invented. Invalid targets
+  receive bounded current-state recovery, not unlimited retries.
 - Exploration is action-budgeted and may stop without confirming the objective.
 - The dashboard cannot approve/resume a stopped run; the developer callback API can.
 - Functional support is deliberately bounded. Ambiguous controls may be rejected.

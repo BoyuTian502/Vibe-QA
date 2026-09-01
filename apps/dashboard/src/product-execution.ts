@@ -6,6 +6,8 @@ import type {
 } from "./exploration-evaluator.js";
 
 import type { QATestMode } from "./alpha-policy.js";
+import type { BrowserRetryEvent } from "./browser-retry.js";
+import type { ModelOutputRecoveryDiagnostics } from "./model-action-runtime.js";
 
 // Product evidence only. Research diagnostics and handoff snapshots stay internal.
 export interface ProductExecution {
@@ -24,6 +26,8 @@ export interface ProductExecution {
     replanAttempts: number;
     recoveredTargets: number;
   };
+  browserRetries?: BrowserRetryEvent[];
+  modelOutputRecovery?: ModelOutputRecoveryDiagnostics;
   escalationReason?: string | null;
   plannerDecisions?: Array<{
     phase: string;

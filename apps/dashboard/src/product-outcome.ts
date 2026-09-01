@@ -6,6 +6,8 @@ export type ProductOutcomeKind =
   | "SAFETY_BLOCKED"
   | "APPROVAL_REQUIRED"
   | "UNSUPPORTED_OBJECTIVE"
+  | "MODEL_OUTPUT_INVALID"
+  | "RECOVERY_LIMIT"
   | "AGENT_ERROR"
   | "MODEL_ERROR"
   | "BROWSER_ERROR"
@@ -57,6 +59,14 @@ const copy: Record<ProductOutcomeKind, [string, string]> = {
   UNSUPPORTED_OBJECTIVE: [
     "Unsupported objective",
     "This objective or control is outside the supported local workflow. Use explicit supported steps or the structured test API."
+  ],
+  MODEL_OUTPUT_INVALID: [
+    "Model response invalid",
+    "The local model did not return a valid browser action after bounded correction attempts. No invented action was executed."
+  ],
+  RECOVERY_LIMIT: [
+    "Target recovery limit reached",
+    "The selected page target could not be grounded after bounded re-observation. Vibe-QA stopped without replaying an uncertain action."
   ],
   AGENT_ERROR: [
     "Agent execution error",
@@ -116,8 +126,18 @@ export function classifyProductOutcome(input: OutcomeEvidence): ProductOutcome {
   )
     kind = "INFRASTRUCTURE_ERROR";
   else if (
+    input.execution?.terminationReason === "MODEL_OUTPUT_INVALID" ||
+    has(/^MODEL_OUTPUT_INVALID:/i)
+  )
+    kind = "MODEL_OUTPUT_INVALID";
+  else if (
+    input.execution?.terminationReason === "RECOVERY_LIMIT" ||
+    has(/^STALE_ELEMENT_RECOVERY_FAILED:/i)
+  )
+    kind = "RECOVERY_LIMIT";
+  else if (
     has(
-      /^(?:Local exploration model|Ollama |STALE_ELEMENT_RECOVERY_FAILED|Unexpected token.*JSON|Unexpected end of JSON|Expected .*JSON|.*not valid JSON)|"code":\s*"invalid_(?:union|type)"/i
+      /^(?:Local exploration model|Ollama |Unexpected token.*JSON|Unexpected end of JSON|Expected .*JSON|.*not valid JSON)|"code":\s*"invalid_(?:union|type)"/i
     )
   )
     kind = "MODEL_ERROR";
@@ -129,6 +149,7 @@ export function classifyProductOutcome(input: OutcomeEvidence): ProductOutcome {
     kind = "BROWSER_ERROR";
   else if (
     input.execution?.terminationReason === "agent-error" ||
+    input.execution?.terminationReason === "AGENT_ERROR" ||
     input.execution?.terminationReason === "null-retry-exhausted" ||
     has(/^Exploration stopped without confirming/)
   )

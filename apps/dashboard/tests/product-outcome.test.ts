@@ -83,9 +83,15 @@ describe("Alpha product outcome presentation", () => {
       "evaluation"
     ],
     [
-      "MODEL_ERROR",
-      "Model execution error",
+      "RECOVERY_LIMIT",
+      "Target recovery limit reached",
       "STALE_ELEMENT_RECOVERY_FAILED: Unknown target",
+      "action"
+    ],
+    [
+      "MODEL_OUTPUT_INVALID",
+      "Model response invalid",
+      "MODEL_OUTPUT_INVALID: unusable action JSON",
       "action"
     ],
     [
@@ -172,6 +178,12 @@ describe("Alpha product outcome presentation", () => {
         errors: ["Unexpected token 'x', not valid JSON"]
       }).kind
     ).toBe("MODEL_ERROR");
+    expect(
+      classifyProductOutcome({
+        status: "failed",
+        errors: ["MODEL_OUTPUT_INVALID: invalid after 2 attempts"]
+      }).kind
+    ).toBe("MODEL_OUTPUT_INVALID");
     expect(
       classifyProductOutcome({
         status: "failed",

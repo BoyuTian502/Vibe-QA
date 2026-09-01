@@ -294,17 +294,57 @@ export class BrowserSession {
       .locator("a, button, input, textarea, select")
       .evaluateAll((nodes) => {
         function selectorFor(element: HTMLElement): string {
-          const id = element.getAttribute("id");
-          if (id) {
-            return `#${CSS.escape(id)}`;
+          function attributeValue(value: string): string {
+            return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
           }
+
+          function unique(selector: string): boolean {
+            try {
+              return document.querySelectorAll(selector).length === 1;
+            } catch {
+              return false;
+            }
+          }
+
+          const tagName = element.tagName.toLowerCase();
+          const id = element.getAttribute("id");
+          if (id && unique(`#${CSS.escape(id)}`)) return `#${CSS.escape(id)}`;
 
           const name = element.getAttribute("name");
           if (name) {
-            return `${element.tagName.toLowerCase()}[name="${CSS.escape(name)}"]`;
+            const selector = `${tagName}[name="${attributeValue(name)}"]`;
+            if (unique(selector)) return selector;
           }
 
-          return element.tagName.toLowerCase();
+          const href = element.getAttribute("href");
+          if (href) {
+            const selector = `${tagName}[href="${attributeValue(href)}"]`;
+            if (unique(selector)) return selector;
+          }
+
+          const ariaLabel = element.getAttribute("aria-label");
+          if (ariaLabel) {
+            const selector = `${tagName}[aria-label="${attributeValue(ariaLabel)}"]`;
+            if (unique(selector)) return selector;
+          }
+
+          const path: string[] = [];
+          let current: HTMLElement | null = element;
+          while (current) {
+            const currentTag = current.tagName.toLowerCase();
+            const siblings = current.parentElement
+              ? Array.from(current.parentElement.children).filter(
+                  (sibling) => sibling.tagName === current?.tagName
+                )
+              : [];
+            const position = Math.max(1, siblings.indexOf(current) + 1);
+            path.unshift(`${currentTag}:nth-of-type(${position})`);
+            const selector = path.join(" > ");
+            if (unique(selector)) return selector;
+            current = current.parentElement;
+          }
+
+          return `${tagName}:nth-of-type(1)`;
         }
 
         return nodes

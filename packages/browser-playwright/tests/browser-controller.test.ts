@@ -44,6 +44,14 @@ describe("PlaywrightBrowserController", () => {
     const dashboard = await browser.observe();
     expect(dashboard.url).toBe(`${app.url}/dashboard`);
     expect(dashboard.textSample).toContain("PRIVATE DASHBOARD");
+    expect(new Set(dashboard.elements.map((element) => element.selector)).size).toBe(
+      dashboard.elements.length
+    );
+    const settingsLink = dashboard.elements.find(
+      (element) => element.href === `${app.url}/settings`
+    );
+    expect(settingsLink?.selector).toBeTruthy();
+    if (!settingsLink) throw new Error("Settings link was not observed.");
 
     const screenshot = await browser.screenshot();
     expect(screenshot).toBeInstanceOf(Uint8Array);
@@ -58,6 +66,8 @@ describe("PlaywrightBrowserController", () => {
         })
       ])
     );
+    await browser.click(settingsLink.selector);
+    await expect.poll(() => browser.getCurrentUrl()).toBe(`${app.url}/settings`);
   });
 
   it("runs the autonomous Agent through the controller interface", async () => {

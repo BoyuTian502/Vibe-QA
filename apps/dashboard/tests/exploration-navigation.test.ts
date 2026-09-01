@@ -397,7 +397,7 @@ async function fixtureServer(): Promise<{ url: string; close(): Promise<void> }>
       return;
     }
     response.end(
-      `<title>Practice</title><h1>Practice pages</h1><a id="missing" href="/missing">Missing page</a><a href="/redirect">Redirect</a><a href="/normal">Guide</a><a href="/other">Other</a>`
+      `<title>Practice</title><h1>Practice pages</h1><a id="missing" href="/missing">Missing page</a><a href="/redirect">Redirect</a><a href="/normal">Guide</a><a href="/other">Other</a><a href="/network-error">Broken network</a>`
     );
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

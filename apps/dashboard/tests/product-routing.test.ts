@@ -88,22 +88,22 @@ describe("product form to execution", () => {
         "navigate"
       ]);
       expect(report.execution?.elementRecovery).toEqual({
-        failedTargets: 1,
-        replanAttempts: 1,
-        recoveredTargets: 1
+        failedTargets: 0,
+        replanAttempts: 0,
+        recoveredTargets: 0
       });
-      expect(report.trace.steps[0]?.elementRecovery).toMatchObject({
-        status: "recovered",
-        invalidSelector: "#element-7"
+      expect(report.execution?.modelOutputRecovery).toMatchObject({
+        invalidResponseCount: 1,
+        retryCount: 1,
+        recoveredCount: 1
       });
-      expect(generate.mock.calls[1]?.[0]).toContain('"failedSelectors":["#element-7"]');
+      expect(generate.mock.calls[1]?.[0]).toContain("CORRECTION REQUIRED");
       const detail = await (
         await fetch(`${dashboard.url}/runs/${completed.runId}`)
       ).text();
       expect(detail).toContain("Exploratory journey");
       expect(detail).toContain("Autonomous exploration");
       expect(detail).toContain("3 model calls");
-      expect(detail).toContain("Recovered unavailable target");
 
       const callsAfterExploration = generate.mock.calls.length;
       for (const mode of ["functional", "regression"] as const) {

@@ -16,11 +16,7 @@ import {
 import { OllamaClient, type LLMClient } from "@vibeqa/llm";
 import type { TestPlanner } from "@vibeqa/planner";
 import { DefaultActionSafetyPolicy } from "@vibeqa/safety-policy";
-import {
-  BrowserActionSchema,
-  type BrowserAction,
-  type Observation
-} from "@vibeqa/schemas";
+import { type BrowserAction, type Observation } from "@vibeqa/schemas";
 import {
   TestTask,
   TestEvaluator,
@@ -32,6 +28,8 @@ import {
 } from "@vibeqa/test-engine";
 
 import { alphaExecutionPolicy, type QATestMode } from "./alpha-policy.js";
+import { RetryingBrowserController } from "./browser-retry.js";
+import { ModelActionRuntime } from "./model-action-runtime.js";
 import type { ProductTestResult } from "./product-execution.js";
 import { classifyProductOutcome, type ProductOutcome } from "./product-outcome.js";
 import { detectPageError, ExplorationEvaluator } from "./exploration-evaluator.js";
@@ -281,9 +279,10 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
           : null;
       const runId = createRunId(this.now(), requestId);
       browser = await this.launchBrowser();
-      const executionBrowser = input.credentials
+      const securedBrowser = input.credentials
         ? new SecureAuthenticatedBrowserController(browser, input.credentials)
         : browser;
+      const executionBrowser = new RetryingBrowserController(securedBrowser);
       let executionResult: ProductTestResult;
       switch (input.mode) {
         case "exploratory":
@@ -329,6 +328,7 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
       executionResult.execution.completedAt = completedAt.toISOString();
       executionResult.execution.durationMs =
         completedAt.getTime() - startedAt.getTime();
+      executionResult.execution.browserRetries ??= executionBrowser.getEvents();
       executionResult.trace.execution = executionResult.execution;
       const result = sanitizeTestResult(executionResult, input.credentials);
       if (input.mode === "functional") {
@@ -364,7 +364,7 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
   }
 
   private async runExploration(
-    browser: BrowserController,
+    browser: RetryingBrowserController,
     input: CreateTestRequestInput,
     screenshotDirectory: string
   ): Promise<ProductTestResult> {
@@ -374,6 +374,22 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
     const baselineSafety = new DefaultActionSafetyPolicy();
     const evidenceBrowser = new EvidenceBrowserController(browser, screenshotDirectory);
     const localClient = this.explorationClient ?? new OllamaClient();
+    const modelRuntime = new ModelActionRuntime({
+      client: {
+        generate: async (prompt) => {
+          try {
+            return await localClient.generate(prompt);
+          } catch (error) {
+            const endpoint =
+              localClient instanceof OllamaClient ? ` at ${localClient.baseUrl}` : "";
+            throw new Error(
+              `Local exploration model unavailable${endpoint}: ${errorMessage(error, input.credentials)}`
+            );
+          }
+        }
+      },
+      credentials: input.credentials
+    });
     const controller: AdaptiveExecutionController = new AdaptiveExecutionController({
       deterministicClient: {
         generate: async (): Promise<string> => {
@@ -431,39 +447,15 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
       },
       ollamaClient: {
         generate: async (prompt) => {
-          let response: string;
-          try {
-            response = await localClient.generate(
-              [
-                "Return only one BrowserAction JSON object or null, with no explanation.",
-                "Use canonical fields: navigate {url}, click {selector}, type {selector,value}, wait {ms}, screenshot {}, getText {selector}, getCurrentUrl {}, assert {selector,containsText}. Include the action type in the type field.",
-                "For click/type, copy a unique visible enabled selector from the current observation. Observation IDs such as element-7 are NOT DOM IDs or CSS selectors. For ambiguous links use navigate with the observed href. Do not reuse a failed target.",
-                `Element recovery: ${redactCredentialValues(JSON.stringify(agent.getElementRecoveryContext()), input.credentials)}`,
-                redactCredentialValues(prompt, input.credentials)
-              ].join("\n")
-            );
-          } catch (error) {
-            const endpoint =
-              localClient instanceof OllamaClient ? ` at ${localClient.baseUrl}` : "";
-            throw new Error(
-              `Local exploration model unavailable${endpoint}: ${errorMessage(error, input.credentials)}`
-            );
+          const observation = agent.state.currentObservation;
+          if (!observation) {
+            throw new Error("Agent observation is unavailable for model grounding.");
           }
-          // Both the frozen controller and Agent receive the same canonical JSON.
-          // In particular, a fenced null must reach Adaptive's bounded null policy.
-          try {
-            const trimmed = response.trim();
-            const json =
-              /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed)?.[1] ?? trimmed;
-            const action: unknown = JSON.parse(json);
-            return action === null
-              ? "null"
-              : JSON.stringify(BrowserActionSchema.parse(action));
-          } catch {
-            throw new Error(
-              "Local exploration model returned invalid BrowserAction JSON."
-            );
-          }
+          return await modelRuntime.generate(
+            prompt,
+            observation,
+            agent.getElementRecoveryContext()
+          );
         }
       },
       maxSteps: 12,
@@ -568,23 +560,32 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
     result.execution = {
       requestedMode: "exploratory",
       strategy: "adaptive-v2",
-      modelInvocationCount: metadata.ollamaInvocationCount,
+      modelInvocationCount: modelRuntime.getDiagnostics().generationAttempts,
       terminationReason: agent.getPendingApproval()
         ? "approval-required"
-        : result.bugReports.some((bug) => bug.pageError)
-          ? "page-error"
-          : agent.state.errors.some((error) =>
-                error.startsWith("STALE_ELEMENT_RECOVERY_FAILED")
-              )
-            ? "STALE_ELEMENT_RECOVERY_FAILED"
-            : agent.state.errors.length
-              ? "agent-error"
-              : agent.state.stepCount >= 12
-                ? "max-steps"
-                : metadata.postHandoffTerminationReason &&
-                    metadata.postHandoffTerminationReason !== "none"
-                  ? metadata.postHandoffTerminationReason
-                  : "planner-stopped",
+        : result.trace.steps.some(
+              (step) =>
+                step.safetyDecision === "block" || step.approvalStatus === "denied"
+            )
+          ? "SAFETY_BLOCKED"
+          : agent.state.errors.some((error) => error.startsWith("MODEL_OUTPUT_INVALID"))
+            ? "MODEL_OUTPUT_INVALID"
+            : result.bugReports.some((bug) => bug.pageError)
+              ? "page-error"
+              : agent.state.errors.some((error) =>
+                    error.startsWith("STALE_ELEMENT_RECOVERY_FAILED")
+                  )
+                ? "RECOVERY_LIMIT"
+                : agent.state.errors.some(isBrowserExecutionError)
+                  ? "BROWSER_ERROR"
+                  : agent.state.errors.length
+                    ? "AGENT_ERROR"
+                    : agent.state.stepCount >= 12
+                      ? "max-steps"
+                      : metadata.postHandoffTerminationReason &&
+                          metadata.postHandoffTerminationReason !== "none"
+                        ? metadata.postHandoffTerminationReason
+                        : "planner-stopped",
       startedAt: "",
       completedAt: "",
       durationMs: 0,
@@ -600,6 +601,8 @@ export class AgentTestRequestExecutor implements TestRequestExecutor {
           (step) => step.elementRecovery?.status === "recovered"
         ).length
       },
+      browserRetries: browser.getEvents(),
+      modelOutputRecovery: modelRuntime.getDiagnostics(),
       escalationReason: metadata.escalationReason,
       plannerDecisions: metadata.plannerDecisions.map((decision) => ({
         phase: decision.phase,
@@ -784,7 +787,17 @@ function isLoadingObservation(observation: Observation): boolean {
   if (detectPageError(observation)) return false;
   const text = observation.textSample.replace(/\s+/gu, " ").trim();
   return (
-    !text || /^(?:loading|please wait|loading please wait)[\s.!\u2026]*$/i.test(text)
+    !text ||
+    /^(?:loading|please wait|loading please wait)[\s.!\u2026]*$/i.test(text) ||
+    (observation.accessibility.interactiveElementCount === 0 &&
+      text.length <= 160 &&
+      /(?:^|\s)(?:loading|please wait)[\s.!\u2026]*$/i.test(text))
+  );
+}
+
+function isBrowserExecutionError(error: string): boolean {
+  return /(?:page\.(?:goto|screenshot)|locator\.|net::ERR_|Target page, context or browser has been closed|The page remained empty or loading|Execution context was destroyed|frame was detached|Timeout \d+ms exceeded)/i.test(
+    error
   );
 }
 
