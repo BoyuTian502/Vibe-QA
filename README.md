@@ -256,3 +256,7 @@ Interactive dashboard approval/resume, stronger local-model reliability and
 reproduction evidence, cross-run website memory, change-based regression selection,
 and optional cloud/multi-user deployment remain separate, review-gated work. These
 are directions, not promised release features.
+
+## License
+
+This project is licensed under the MIT License.
